@@ -5,17 +5,36 @@ use super::elements::*;
 use super::group;
 use super::space::*;
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct GripId(u8);
+// #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+// pub struct GripId(u8);
 
-pub const R: GripId = GripId::new(0);
-pub const L: GripId = GripId::new(1);
-pub const U: GripId = GripId::new(2);
-pub const D: GripId = GripId::new(3);
-pub const F: GripId = GripId::new(4);
-pub const B: GripId = GripId::new(5);
-pub const O: GripId = GripId::new(6);
-pub const I: GripId = GripId::new(7);
+// pub const R: GripId = GripId::new(0);
+// pub const L: GripId = GripId::new(1);
+// pub const U: GripId = GripId::new(2);
+// pub const D: GripId = GripId::new(3);
+// pub const F: GripId = GripId::new(4);
+// pub const B: GripId = GripId::new(5);
+// pub const O: GripId = GripId::new(6);
+// pub const I: GripId = GripId::new(7);
+
+// pub const HYPERCUBE_GRIPS: [GripId; 8] = [R, L, U, D, F, B, O, I];
+// pub const CUBE_GRIPS: [GripId; 6] = [R, L, U, D, F, B];
+
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum GripId {
+    #[default]
+    R = 0,
+    L = 1,
+    U = 2,
+    D = 3,
+    F = 4,
+    B = 5,
+    O = 6,
+    I = 7,
+}
+
+pub use GripId::{B, D, F, I, L, O, R, U};
 
 pub const HYPERCUBE_GRIPS: [GripId; 8] = [R, L, U, D, F, B, O, I];
 pub const CUBE_GRIPS: [GripId; 6] = [R, L, U, D, F, B];
@@ -32,13 +51,13 @@ impl fmt::Display for GripId {
 
 impl GripId {
     pub const fn id(self) -> u8 {
-        self.0
+        self as u8
     }
     pub const fn axis(self) -> usize {
-        self.0 as usize >> 1
+        self.id() as usize >> 1
     }
     pub const fn signum(self) -> i8 {
-        if self.0 & 1 == 0 { 1 } else { -1 }
+        if self.id() & 1 == 0 { 1 } else { -1 }
     }
 
     #[inline]
@@ -59,23 +78,37 @@ impl GripId {
     /// Constructs a grip from an ID, or returns `None` if `id` is out of range
     /// (must be strictly less than 8).
     pub const fn try_new(id: u8) -> Option<Self> {
-        if id < 8 { Some(Self(id)) } else { None }
+        // if id < 8 { Some(Self(id)) } else { None }
+        match id {
+            0 => Some(R),
+            1 => Some(L),
+            2 => Some(U),
+            3 => Some(D),
+            4 => Some(F),
+            5 => Some(B),
+            6 => Some(O),
+            7 => Some(I),
+            _ => None,
+        }
     }
+
+    // TODO: remove
     /// Hint to the compiler that the grip ID is within bounds.
     #[inline]
     pub const fn hint_assert_in_bounds(self) -> Self {
         // SAFETY: `GripId` is only ever constructed using `GripId::try_new()`,
         // which returns `None` if the ID is greater than or equal to 8.
-        unsafe { std::hint::assert_unchecked(self.0 < 8) };
+        unsafe { std::hint::assert_unchecked(self.id() < 8) };
         self
     }
 
     pub const fn opposite(self) -> Self {
-        Self(self.0 ^ 1)
+        // Self(self.id() ^ 1)
+        Self::new(self.id() ^ 1)
     }
 
     pub const fn char(self) -> char {
-        b"RLUDFBOI"[self.0 as usize] as char
+        b"RLUDFBOI"[self.id() as usize] as char
     }
 
     pub fn vec(self) -> Vec4 {

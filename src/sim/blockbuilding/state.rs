@@ -1586,7 +1586,7 @@ mod tests {
 
         for (should_be_solved, last_layer_twist_seq) in last_layer_algs {
             let mut state = BlockSet {
-                blocks: StackVec::from_iter([Block::new_solved([], [U]).unwrap()]).unwrap(),
+                blocks: StackVec::from_iter([Block::new_solved([], [GripId::U]).unwrap()]).unwrap(),
             };
             for t in last_layer_twist_seq
                 .split_ascii_whitespace()
