@@ -361,8 +361,7 @@ impl PackedLayers {
     }
 
     /// Returns the number of active grips the block has.
-    // #[inline]
-    #[inline(never)]
+    #[inline(always)]
     pub const fn active_grip_count(self) -> u32 {
         let bits = self.to_u16();
         let pos_bits = bits & 0b_0001_0001_0001_0001;

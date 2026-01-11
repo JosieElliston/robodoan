@@ -30,16 +30,9 @@ impl BlockSet {
     #[expect(unused)]
     const SIZE_ASSERT: [u8; 64] = [0; std::mem::size_of::<Self>()];
 
-    fn sorted(self) -> Self {
-        Self {
-            blocks: self.blocks.sorted_unstable(),
-        }
-    }
-
     /// Applies a twist and returns the new state.
     ///
-    /// Returns `None` if the twist failed because there are too many blocks to
-    /// track.
+    /// Returns `None` if the twist failed because there are too many blocks to track.
     #[must_use]
     #[inline(never)]
     pub fn old_do_twist(self, twist: Twist, _ndim: usize) -> Option<Self> {
@@ -213,21 +206,10 @@ impl BlockSet {
         for i in 0..len {
             let block = self.blocks[i];
             let [inside, outside] = twist * block;
-            // let [inside, outside] = block.split(twist.grip);
-            // let inside = inside.map(|b| Block {
-            //     layers: twist.transform * b.layers,
-            //     attitude: twist.transform * b.attitude,
-            // });
-            // if let Some(inside) = inside {
-            //     new_blocks = new_blocks.push(inside).unwrap();
-            // }
-            // if let Some(outside) = outside {
-            //     new_blocks = new_blocks.push(outside).unwrap();
-            // }
             match (inside, outside) {
                 (Some(inside), Some(outside)) => {
                     self.blocks[i] = inside;
-                    self.blocks = self.blocks.push(outside).unwrap();
+                    self.blocks = self.blocks.push(outside)?;
                 }
                 (Some(inside), None) => {
                     self.blocks[i] = inside;
