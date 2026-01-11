@@ -67,7 +67,7 @@ pub static CUBE_ROTATIONS: [ElemId; 24] = *W_STABILIZER;
 
 /// Element from the grip group.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ElemId(u8);
+pub struct ElemId(pub u8);
 
 impl ElemId {
     pub const IDENT: Self = IDENT;
@@ -155,6 +155,7 @@ impl Mul for ElemId {
         self.hint_assert_in_bounds();
         rhs.hint_assert_in_bounds();
         group::CHIRAL_BC4.mul_elem_elem[self.id() as usize][rhs.id() as usize]
+        // group::CHIRAL_BC4.mul_elem_elem_transpose[rhs.id() as usize][self.id() as usize]
     }
 }
 

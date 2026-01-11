@@ -15,6 +15,7 @@ pub enum Heuristic {
 impl Heuristic {
     /// Returns whether the heuristic believes that `state` can be reduced to
     /// `expected_blocks` blocks within `remaining_moves`.
+    #[inline(never)]
     pub fn might_be_solvable(
         self,
         puzzle: &Puzzle,
@@ -31,6 +32,7 @@ impl Heuristic {
 
     /// Returns the maximum number of block pairings possible using a naive
     /// combinatoric approach.
+    #[inline(never)]
     fn combinatoric_limit(self, expected_blocks: usize, remaining_moves: usize) -> usize {
         match self {
             Heuristic::Fast => 1 << remaining_moves,
@@ -39,6 +41,7 @@ impl Heuristic {
     }
     /// Returns the maximum number of block pairings using a grip-theoretic
     /// approach.
+    #[inline(never)]
     fn grip_theoretic_limit(
         self,
         puzzle: &Puzzle,
@@ -60,7 +63,7 @@ impl Heuristic {
                 std::iter::zip(state.blocks, blocks_when_solved).skip(i + 1)
             {
                 if let Some((_combined_block, merge_axis)) =
-                    b1_when_solved.try_merge_with(b2_when_solved)
+                    b1_when_solved.try_merge_with_ret_axis(b2_when_solved)
                 {
                     let ([body, head], head_when_solved) =
                         if b1.layers().has_middle_slice_on_axis(merge_axis) {

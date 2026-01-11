@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ops::{BitAnd, BitOr, BitXor, Mul};
+use std::sync::atomic::AtomicU64;
 
 use crate::sim::common::*;
 
@@ -22,11 +23,17 @@ impl PackedLayers {
     pub const ALL: Self = Self::from_u16(0b_0111_0111_0111_0111);
 
     #[inline]
-    const fn to_u16(self) -> u16 {
+    pub(crate) const fn to_u16(self) -> u16 {
         u16::from_ne_bytes(self.0)
     }
     #[inline]
     pub(crate) const fn from_u16(i: u16) -> Self {
+        // debug_assert!(i != 0);
+        debug_assert!(i & 0x8888 == 0);
+        // debug_assert!(i & 0x0007 != 0x0005);
+        // debug_assert!(i & 0x0070 != 0x0050);
+        // debug_assert!(i & 0x0700 != 0x0500);
+        // debug_assert!(i & 0x7000 != 0x5000);
         Self(i.to_ne_bytes())
     }
 
@@ -72,8 +79,8 @@ impl PackedLayers {
     }
 
     #[inline]
-    const fn bits_for_axis(self, axis: usize) -> u8 {
-        assert!(axis < 4, "axis out of range");
+    pub const fn bits_for_axis(self, axis: usize) -> u8 {
+        debug_assert!(axis < 4, "axis out of range");
         ((self.to_u16() >> (axis * 4)) & 0b111) as u8
     }
     #[inline]
@@ -136,30 +143,209 @@ impl PackedLayers {
 
     /// Merges the blocks if possible. Returns the merged block and the axis
     /// along which they were merged.
+    // cargo asm --rust --lib robodoan::sim::blockbuilding::layer_mask::PackedLayers::try_merge_with_no_ret_axis
     #[must_use]
-    pub fn try_merge_with(self, other: Self) -> Option<(Self, usize)> {
+    #[inline(never)]
+    #[cfg(false)]
+    pub fn try_merge_with_no_ret_axis(self, other: Self) -> Option<Self> {
+        let lhs = self.to_u16();
+        let rhs = other.to_u16();
+        let layer_difference = lhs ^ rhs;
+        // if layer_difference.count_ones() > 3 {
+        //     return None; // multiple axes are guaranteed to have different layers
+        // }
+
+        // {
+        //     let different_axes = (layer_difference & 0x0007 != 0) as u32
+        //         + (layer_difference & 0x0070 != 0) as u32
+        //         + (layer_difference & 0x0700 != 0) as u32
+        //         + (layer_difference & 0x7000 != 0) as u32;
+        //     // assert_ne!(different_axes, 0);
+        //     if different_axes != 1 {
+        //         COUNTER_A.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        //         return None;
+        //     } else {
+        //         COUNTER_B.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        //     }
+        //     // if different_axes != 1 {
+        //     //     if layer_difference.count_ones() > 3 {
+        //     //         COUNTER_A.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        //     //     } else {
+        //     //         COUNTER_B.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        //     //     }
+        //     // }
+        // }
+
+        // let merge_axis = layer_difference.trailing_zeros() as usize / 4;
+        // debug_assert!(merge_axis < 4, "same block!"); // otherwise they'd be the same blocks
+
+        let mask = {
+            let mut mask = layer_difference;
+            mask |= mask >> 1;
+            mask |= mask << 1;
+            // at this point, the middle bit is 1 iff any of the bits are 1
+            mask &= 0x7777; // to avoid spilling into other axes
+            mask |= mask >> 1;
+            mask |= mask << 1;
+            // at this point, mask will be 0b*111 at each axis where there is a difference and 0b*000 otherwise, where * is undefined
+            mask
+        };
+        // let left_mask = {
+        //     let mut left_mask = mask;
+        //     left_mask |= left_mask << 4;
+        //     left_mask |= left_mask << 8;
+        //     // and now left_mask will select all axes to the left of the difference as well
+        //     left_mask
+        // };
+
+        // if layer_difference & (left_mask << 4) != 0 {
+        // assert_eq!(
+        //     layer_difference & (mask << 4 | mask << 8 | mask << 12) != 0,
+        //     layer_difference.unbounded_shr((merge_axis as u32 + 1) * 4) != 0
+        // );
+        if layer_difference & (mask << 4 | mask << 8 | mask << 12) != 0 {
+            return None; // multiple axes have different layers
+        }
+
+        let or = lhs | rhs;
+        // assert_eq!(
+        //     or & mask == 0b0101_0101_0101_0101 & mask,
+        //     self.bits_for_axis(merge_axis) | other.bits_for_axis(merge_axis) == 0b101
+        // );
+        // assert_eq!(
+        //     or & mask == 0b0101_0101_0101_0101 & mask,
+        //     (or ^ 0b0101_0101_0101_0101) & mask == 0
+        // );
+        if or & mask == 0b0101_0101_0101_0101 & mask {
+            return None; // disconnected blocks not allowed (but they could be, if we had slice moves)
+        }
+
+        Some(PackedLayers::from_u16(or))
+
+        // let diff0 = layer_difference & 0b0111;
+        // // let diff1 = layer_difference & 0b0111_0000;
+        // let diff1 = (layer_difference >> 4) & 0b0111;
+
+        // let lhs_shifted = lhs >> (merge_axis * 4);
+        // let rhs_shifted = rhs >> (merge_axis * 4);
+        // let or = lhs_shifted | rhs_shifted;
+        // // if or & 0xFFF0 != 0 {
+        // //     return None; // multiple axes have different layers
+        // // }
+        // // if or & 0b111 == 0b101 {
+        // //     return None; // disconnected blocks not allowed (but they could be, if we had slice moves)
+        // // }
+
+        // if layer_difference.unbounded_shr((merge_axis as u32 + 1) * 4) != 0 {
+        //     return None; // multiple axes have different layers
+        // }
+
+        // let axis_mask = 0b111 << (merge_axis * 4);
+        // if ((lhs | rhs) & axis_mask & 0b0101_0101_0101_0101) != 0 {
+        //     return None; // disconnected blocks not allowed (but they could be, if we had slice moves)
+        // }
+
+        // // // let lhs_axis_bits = self.bits_for_axis(merge_axis);
+        // // // let rhs_axis_bits = other.bits_for_axis(merge_axis);
+        // let lhs_axis_bits = (lhs >> (merge_axis * 4)) & 0b111;
+        // let rhs_axis_bits = (rhs >> (merge_axis * 4)) & 0b111;
+
+        // // assert!(lhs_axis_bits & rhs_axis_bits == 0, "blocks shouldn't overlap");
+        // // if lhs_axis_bits & rhs_axis_bits != 0 {
+        // //     return None; // `self` and `other` overlap
+        // // }
+
+        // assert_eq!(or & 0b111 == 0b101, lhs_axis_bits | rhs_axis_bits == 0b101);
+        // if lhs_axis_bits | rhs_axis_bits == 0b101 {
+        //     return None; // disconnected blocks not allowed (but they could be, if we had slice moves)
+        // }
+
+        // Some((self | other, merge_axis as usize))
+    }
+    #[must_use]
+    #[inline(never)]
+    pub fn try_merge_with_no_ret_axis(self, other: Self) -> Option<Self> {
         let lhs = self.to_u16();
         let rhs = other.to_u16();
         let layer_difference = lhs ^ rhs;
         let merge_axis = layer_difference.trailing_zeros() as usize / 4;
-        debug_assert!(merge_axis < 4, "same block!"); // otherwise they'd be the same blocks
+        debug_assert!(merge_axis < 4);
 
-        if layer_difference.unbounded_shr((merge_axis as u32 + 1) * 4) != 0 {
+        // if layer_difference
+        //     & match merge_axis {
+        //         0 => 0x7770,
+        //         1 => 0x7707,
+        //         2 => 0x7077,
+        //         3 => 0x0777,
+        //         _ => unreachable!(),
+        //     }
+        //     != 0
+        if layer_difference & !(0x7 << (merge_axis * 4)) != 0 {
+            // TODO: try_merge that assumes this
+            // panic!("we should be checking for this already");
             return None; // multiple axes have different layers
         }
 
         let lhs_axis_bits = self.bits_for_axis(merge_axis);
         let rhs_axis_bits = other.bits_for_axis(merge_axis);
 
-        if lhs_axis_bits & rhs_axis_bits != 0 {
-            return None; // `self` and `other` overlap
-        }
+        debug_assert!(
+            lhs_axis_bits & rhs_axis_bits == 0,
+            "blocks shouldn't overlap"
+        );
 
         if lhs_axis_bits | rhs_axis_bits == 0b101 {
-            return None; // disconnected blocks not allowed (but they could be, if we had slice moves)
+            return None; // disconnected blocks not allowed
         }
 
-        Some((self | other, merge_axis))
+        Some(self | other)
+    }
+    #[must_use]
+    #[inline(never)]
+    pub fn try_merge_with_along_axis(self, other: Self, merge_axis: usize) -> Option<Self> {
+        let lhs = self.to_u16();
+        let rhs = other.to_u16();
+        let layer_difference = lhs ^ rhs;
+        debug_assert!(merge_axis < 4);
+        debug_assert_eq!(layer_difference.trailing_zeros() as usize / 4, merge_axis);
+
+        // if layer_difference
+        //     & match merge_axis {
+        //         0 => 0x7770,
+        //         1 => 0x7707,
+        //         2 => 0x7077,
+        //         3 => 0x0777,
+        //         _ => unreachable!(),
+        //     }
+        //     != 0
+        if layer_difference & !(0x7 << (merge_axis * 4)) != 0 {
+            return None; // multiple axes have different layers
+        }
+
+        let lhs_axis_bits = self.bits_for_axis(merge_axis);
+        let rhs_axis_bits = other.bits_for_axis(merge_axis);
+
+        debug_assert!(
+            lhs_axis_bits & rhs_axis_bits == 0,
+            "blocks shouldn't overlap"
+        );
+
+        if lhs_axis_bits | rhs_axis_bits == 0b101 {
+            return None; // disconnected blocks not allowed
+        }
+
+        Some(self | other)
+    }
+    #[must_use]
+    #[inline(never)]
+    pub fn try_merge_with_ret_axis(self, other: Self) -> Option<(Self, usize)> {
+        let lhs = self.to_u16();
+        let rhs = other.to_u16();
+        let layer_difference = lhs ^ rhs;
+        Some((
+            Self::try_merge_with_no_ret_axis(self, other)?,
+            layer_difference.trailing_zeros() as usize / 4,
+        ))
     }
 
     /// Returns the positive grips on the separating axes of the blocks.
@@ -175,7 +361,8 @@ impl PackedLayers {
     }
 
     /// Returns the number of active grips the block has.
-    #[inline]
+    // #[inline]
+    #[inline(never)]
     pub const fn active_grip_count(self) -> u32 {
         let bits = self.to_u16();
         let pos_bits = bits & 0b_0001_0001_0001_0001;
@@ -338,7 +525,7 @@ mod tests {
         });
 
         let expected = merge_grip.map(|g| (l1 | l2, g.axis()));
-        let actual = l1.try_merge_with(l2);
+        let actual = l1.try_merge_with_ret_axis(l2);
 
         assert_eq!(expected, actual);
     }

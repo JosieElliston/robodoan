@@ -1,17 +1,18 @@
 use std::fmt;
 use std::ops::Mul;
+use std::sync::atomic;
 
 use super::layer_mask::{GripStatus, PackedLayers};
 use super::piece::Piece;
-use crate::StackVec;
 use crate::sim::common::*;
+use crate::{COUNTER_A, COUNTER_B, StackVec};
 
 /// Block of pieces with compatible attitudes, displayed as
 /// `ACTIVE_GRIPS$blocked_grips!INACTIVE_GRIPS`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Block {
-    layers: PackedLayers,
-    attitude: ElemId,
+    pub layers: PackedLayers,
+    pub attitude: ElemId,
 }
 // same as `#[derive(Default)]` but easier for the compiler to inline
 impl Default for Block {
@@ -135,7 +136,9 @@ impl Block {
     /// - In 4D, only centers and ridges has indistinguishable attitudes.
     ///
     /// The core's attitude is always completely distinguishable.
-    pub fn indistinguishable_attitudes(&self, ndim: usize) -> impl Iterator<Item = ElemId> {
+    #[inline(never)]
+    pub fn indistinguishable_attitudes(&self, _ndim: usize) -> impl Iterator<Item = ElemId> {
+        let ndim = 4;
         self.layers
             .indistinguishable_subgroup()
             .filter(|_| !(ndim == 3 && self.layers == PackedLayers::CORE_3D)) // 3D core is distinguishable
@@ -146,6 +149,7 @@ impl Block {
     /// Returns the set of grips constructed by taking all indistinguishable
     /// attitudes for the block in its current position and mutliplying each one
     /// by `g`. Duplicates are not included.
+    #[inline(never)]
     pub fn mul_indistinguishable_attides_by_grip(
         self,
         ndim: usize,
@@ -179,6 +183,7 @@ impl Block {
     }
 
     //// Returns `[inside, outside]`
+    #[inline(never)]
     pub fn split(self, grip: GripId) -> [Option<Self>; 2] {
         self.layers.split(grip).map(|layers| {
             Some(Block {
@@ -188,8 +193,43 @@ impl Block {
         })
     }
 
+    #[inline(never)]
     pub fn try_merge(self, other: Self, ndim: usize) -> Option<Self> {
-        let layers = self.layers.try_merge_with(other.layers)?.0;
+        let ndim = 4;
+        assert_ne!(self.layers, other.layers);
+        // COUNTER_A.fetch_add(1, atomic::Ordering::Relaxed);
+        // TODO: move this to after checking indistinguishable attitudes, if we know they're maybe_mergeable along an axis, so this fails rarely
+        let layers = self.layers.try_merge_with_no_ret_axis(other.layers)?;
+        // COUNTER_B.fetch_add(1, atomic::Ordering::Relaxed);
+
+        let [head, body] = if self.layers.active_grip_count() > other.layers.active_grip_count() {
+            [self, other]
+        } else {
+            [other, self]
+        };
+
+        if !body
+            .indistinguishable_attitudes(ndim)
+            .any(|a| a == head.attitude)
+        {
+            // TODO: this is where most things are failing
+            // COUNTER_A.fetch_add(1, atomic::Ordering::Relaxed);
+            return None;
+        }
+        // else {
+        //     COUNTER_B.fetch_add(1, atomic::Ordering::Relaxed);
+        // }
+
+        Some(Self {
+            layers,
+            attitude: head.attitude,
+        })
+    }
+    #[inline(never)]
+    pub fn try_merge_along_axis(self, other: Self, axis: usize) -> Option<Self> {
+        let ndim = 4;
+        assert_ne!(self.layers, other.layers);
+        let layers = self.layers.try_merge_with_along_axis(other.layers, axis)?;
 
         let [head, body] = if self.layers.active_grip_count() > other.layers.active_grip_count() {
             [self, other]
@@ -212,14 +252,20 @@ impl Block {
 }
 impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { layers, attitude } = self;
-        write!(f, "{layers:?}@[{attitude:?}]")
+        let Self {
+            layers,
+            attitude: ElemId(attitude),
+        } = self;
+        write!(f, "{layers:?}@{attitude:03}")
     }
 }
 impl fmt::Display for Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { layers, attitude } = self;
-        write!(f, "{layers}@[{attitude}]")
+        let Self {
+            layers,
+            attitude: ElemId(attitude),
+        } = self;
+        write!(f, "{layers}@{attitude:03}")
     }
 }
 

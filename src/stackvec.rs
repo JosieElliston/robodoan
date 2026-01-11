@@ -36,10 +36,30 @@ impl<T: Default + Copy, const CAP: usize> Default for StackVec<T, CAP> {
         }
     }
 }
-
+impl<T: Ord + Eq + Copy, const CAP: usize> StackVec<T, CAP> {
+    /// self should already be sorted
+    pub fn deduped(mut self) -> Self {
+        if self.len == 0 {
+            return self;
+        }
+        let mut write_index = 1;
+        for read_index in 1..self.len() {
+            if self[read_index] != self[write_index - 1] {
+                self[write_index] = self[read_index];
+                write_index += 1;
+            }
+        }
+        self.len = write_index as u8;
+        self
+    }
+}
 impl<T: Default + Copy, const CAP: usize> StackVec<T, CAP> {
     pub fn new() -> Self {
         Self::default()
+    }
+    pub fn clear(&mut self) {
+        self.elems.fill(T::default());
+        self.len = 0;
     }
 
     #[must_use = "this method returns a new value rather than modifying its input"]
@@ -59,6 +79,16 @@ impl<T: Default + Copy, const CAP: usize> StackVec<T, CAP> {
         *self.elems.get_mut(self.len as usize)? = elem;
         self.len += 1;
         Some(self)
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(std::mem::replace(
+            &mut self.elems[self.len as usize],
+            T::default(),
+        ))
     }
 
     #[must_use = "this method returns a new value rather than modifying its input"]
@@ -82,17 +112,30 @@ impl<T: Default + Copy, const CAP: usize> StackVec<T, CAP> {
     }
 
     #[must_use = "this method returns a new value rather than modifying its input"]
+    // #[inline(never)]
     pub fn extend(mut self, iter: impl IntoIterator<Item = T>) -> Option<Self> {
         let iter = iter.into_iter();
 
         let (lo, _) = iter.size_hint();
         if self.len as usize + lo > CAP {
+            // panic!();
             return None; // definitely won't fit
         }
 
         for elem in iter {
             self = self.push(elem)?;
         }
+        Some(self)
+    }
+    #[inline(never)]
+    pub fn extend_from_stackvec<const M: usize>(mut self, other: &StackVec<T, M>) -> Option<Self> {
+        if self.len as usize + other.len as usize > CAP {
+            return None;
+        }
+
+        self.elems[self.len as usize..(self.len + other.len) as usize]
+            .copy_from_slice(&other.elems[..other.len as usize]);
+        self.len += other.len;
         Some(self)
     }
 
@@ -110,6 +153,7 @@ impl<T: Default + Copy, const CAP: usize> StackVec<T, CAP> {
 }
 impl<T, const CAP: usize> StackVec<T, CAP> {
     #[must_use = "this method returns a new value rather than modifying its input"]
+    #[inline(never)]
     pub fn sorted_unstable(mut self) -> Self
     where
         T: Ord,
@@ -117,11 +161,13 @@ impl<T, const CAP: usize> StackVec<T, CAP> {
         self.sort_unstable();
         self
     }
+    #[inline(never)]
     #[must_use = "this method returns a new value rather than modifying its input"]
     pub fn sorted_unstable_by_key<K: Ord>(mut self, f: impl FnMut(&T) -> K) -> Self {
         self.sort_unstable_by_key(f);
         self
     }
+    #[inline(never)]
     #[must_use = "this method returns a new value rather than modifying its input"]
     pub fn sorted_unstable_by(mut self, compare: impl FnMut(&T, &T) -> Ordering) -> Self {
         self.sort_unstable_by(compare);

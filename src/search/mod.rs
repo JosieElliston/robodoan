@@ -45,6 +45,8 @@ impl Solver {
         println!("\nSTAGE 1: mid + left, 2x2x2x2 block");
         self.do_blockbuilding_stage(self.profile.select(1, 5), |meta| meta.stage1());
 
+        // show_counters();
+
         println!("\nSTAGE 2: mid + left, 2x2x3x2 block");
         self.do_blockbuilding_stage(self.profile.select(1, 5), |meta| meta.stage2());
 
@@ -104,6 +106,8 @@ impl Solver {
         )
         .unwrap();
         println!("All solutions written to {out_file_name}");
+
+        show_counters();
 
         twists_of_best_solution
     }
@@ -375,5 +379,114 @@ pub fn dfs_blockbuild(
         let grips = puzzle.grips.iter().filter(grip_is_worth_testing);
         let twists = grips.flat_map(|grip| grip.twists());
         twists.for_each(|twist| explore_twist(twist, solutions_buffer));
+    }
+}
+
+fn show_counters() {
+    #[cfg(true)]
+    {
+        if COUNTER_A.load(std::sync::atomic::Ordering::Relaxed) != 0
+            || COUNTER_B.load(std::sync::atomic::Ordering::Relaxed) != 0
+        {
+            println!(
+                "A / B = {} / {} = {}",
+                COUNTER_A.load(std::sync::atomic::Ordering::Relaxed),
+                COUNTER_B.load(std::sync::atomic::Ordering::Relaxed),
+                COUNTER_A.load(std::sync::atomic::Ordering::Relaxed) as f64
+                    / (COUNTER_B.load(std::sync::atomic::Ordering::Relaxed) as f64)
+            );
+        }
+        if COUNTER_C.load(std::sync::atomic::Ordering::Relaxed) != 0
+            || COUNTER_D.load(std::sync::atomic::Ordering::Relaxed) != 0
+        {
+            println!(
+                "C / D = {} / {} = {}",
+                COUNTER_C.load(std::sync::atomic::Ordering::Relaxed),
+                COUNTER_D.load(std::sync::atomic::Ordering::Relaxed),
+                COUNTER_C.load(std::sync::atomic::Ordering::Relaxed) as f64
+                    / COUNTER_D.load(std::sync::atomic::Ordering::Relaxed) as f64
+            );
+        }
+        let len_before = LEN_BEFORE
+            .iter()
+            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            .collect::<Vec<_>>();
+        let len_after = LEN_AFTER
+            .iter()
+            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            .collect::<Vec<_>>();
+        if len_before.iter().any(|c| *c != 0) || len_after.iter().any(|c| *c != 0) {
+            println!("len_before / len_after:");
+            for i in 0..crate::MAX_BLOCKS {
+                let before = len_before[i];
+                let after = len_after[i];
+                println!("{i}: {before} / {after} = {}", before as f64 / after as f64);
+            }
+            // fn print_hist(name: &str, data: &[u64]) {
+            //     println!("Histogram {name}:");
+            //     let total = data.iter().sum::<u64>();
+            //     let max = *data.iter().max().unwrap();
+            //     println!("total: {total}");
+            //     println!("max: {max}");
+            //     const SCALE: u64 = 32;
+            //     for (i, &count) in data.iter().enumerate() {
+            //         if data[i..].iter().all(|&c| c == 0) {
+            //             break;
+            //         }
+            //         print!("  {i:02}: {count:09} {:.05} ", count as f64 / total as f64);
+            //         for _ in 0..(SCALE * count / max) {
+            //             print!("#");
+            //         }
+            //         println!();
+            //     }
+            // }
+            fn print_hist(name: &str, data: &[u64]) {
+                use std::io::Write;
+                let f = std::fs::File::create(format!("hist_{name}.txt")).unwrap();
+                let mut writer = std::io::BufWriter::new(f);
+                writeln!(writer, "histogram {name}:").unwrap();
+                let total = data.iter().sum::<u64>();
+                let max = *data.iter().max().unwrap();
+                writeln!(writer, "total: {total}").unwrap();
+                writeln!(writer, "max: {max}").unwrap();
+                // const SCALE: u64 = 32;
+                const SCALE: u64 = 64;
+                for (i, &count) in data.iter().enumerate() {
+                    if data[i..].iter().all(|&c| c == 0) {
+                        break;
+                    }
+                    write!(
+                        writer,
+                        "  {:?}: {count:09} {:.05} ",
+                        layer_of_hash(i as _),
+                        count as f64 / total as f64
+                    )
+                    .unwrap();
+                    // write!(
+                    //     writer,
+                    //     "  {i:02}: {count:09} {:.05} ",
+                    //     count as f64 / total as f64
+                    // )
+                    // .unwrap();
+                    // draw . if nonzero but would have no #
+                    if count != 0 && SCALE * count / max == 0 {
+                        write!(writer, ".").unwrap();
+                    } else {
+                        for _ in 0..(SCALE * count / max) {
+                            write!(writer, "#").unwrap();
+                        }
+                    }
+                    writeln!(writer).unwrap();
+                }
+            }
+            if len_before.iter().any(|c| *c != 0) {
+                print_hist("before", &len_before);
+            }
+            if len_after.iter().any(|c| *c != 0) {
+                print_hist("after", &len_after);
+            }
+        }
+
+        panic!("done");
     }
 }

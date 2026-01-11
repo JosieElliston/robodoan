@@ -4,7 +4,7 @@ use itertools::Itertools;
 use robodoan::*;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let profile = Profile::Short;
+    let profile = Profile::Fast;
 
     if let Some(filename) = std::env::args().nth(1) {
         let log_file_text = std::fs::read_to_string(&filename)?;

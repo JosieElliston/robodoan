@@ -1,3 +1,4 @@
+#![feature(portable_simd)]
 #[macro_use]
 mod macros;
 pub mod mc4d;

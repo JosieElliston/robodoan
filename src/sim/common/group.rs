@@ -16,6 +16,7 @@ pub static CHIRAL_BC4: Group = Group::bc4();
 pub struct Group {
     pub inv_elem: [ElemId; ELEM_COUNT],
     pub mul_elem_elem: [[ElemId; ELEM_COUNT]; ELEM_COUNT],
+    // pub mul_elem_elem_transpose: [[ElemId; ELEM_COUNT]; ELEM_COUNT],
     pub mul_elem_vec: [[Vec4; 4]; ELEM_COUNT],
     pub mul_elem_grip: [[GripId; 8]; ELEM_COUNT],
 }
@@ -53,6 +54,15 @@ impl Group {
             })
             .collect_array::<ELEM_COUNT>()
             .unwrap();
+        // let mul_elem_elem_transpose: [[ElemId; ELEM_COUNT]; ELEM_COUNT] = (0..ELEM_COUNT)
+        //     .map(|i| {
+        //         (0..ELEM_COUNT)
+        //             .map(|j| mul_elem_elem[j][i])
+        //             .collect_array::<ELEM_COUNT>()
+        //             .unwrap()
+        //     })
+        //     .collect_array::<ELEM_COUNT>()
+        //     .unwrap();
 
         let mul_elem_vec: [[Vec4; 4]; ELEM_COUNT] = matrices
             .iter()
@@ -84,10 +94,11 @@ impl Group {
             })
             .collect_array()
             .unwrap();
-
+        
         Self {
             inv_elem,
             mul_elem_elem,
+            // mul_elem_elem_transpose,
             mul_elem_vec,
             mul_elem_grip,
         }
