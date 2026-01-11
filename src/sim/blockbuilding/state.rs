@@ -46,13 +46,10 @@ impl BlockSet {
         // panic!("should be unused");
         // LEN_BEFORE[self.blocks.len()].fetch_add(1,
         // std::sync::atomic::Ordering::Relaxed);
-        let new_blocks = StackVec::<Block, { crate::MAX_BLOCKS }>::from_iter(
-            self.blocks
-                .into_iter()
-                .flat_map(|block| twist * block)
-                .flatten(), // Option<T> -> T
-        )?;
-        let premerged = Self { blocks: new_blocks };
+
+        // let premerged = self.old_premerged(twist)?;
+        let premerged = self.new_premerged(twist)?;
+
         // let oracle = premerged.old_merge_blocks(ndim);
         // assert_eq!(
         //     premerged.fully_split().iter().sorted().collect::<Vec<_>>(),
@@ -60,7 +57,9 @@ impl BlockSet {
         // );
         // assert!(premerged.piece_equivalent(oracle));
         // premerged.assert_piece_equivalent(oracle);
+        // let actual = premerged.old_merge_blocks(4);
         let actual = premerged.merge_blocks(4);
+
         // let actual = premerged.old_merge_blocks(4);
 
         // if premerged.can_maybe_merge_blocks_len_lte_16() {
@@ -196,6 +195,35 @@ impl BlockSet {
         //         COUNTER_D.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         //     }
         // }
+    }
+
+    fn old_premerged(&self, twist: Twist) -> Option<Self> {
+        Some(Self {
+            blocks: StackVec::<Block, { crate::MAX_BLOCKS }>::from_iter(
+                self.blocks
+                    .into_iter()
+                    .flat_map(|block| twist * block)
+                    .flatten(), // Option<T> -> T
+            )?,
+        })
+    }
+
+    fn new_premerged(&self, twist: Twist) -> Option<Self> {
+        let mut new_blocks = StackVec::new();
+        for block in self.blocks {
+            let [inside, outside] = block.split(twist.grip);
+            let inside = inside.map(|b| Block {
+                layers: twist.transform * b.layers,
+                attitude: twist.transform * b.attitude,
+            });
+            if let Some(inside) = inside {
+                new_blocks = new_blocks.push(inside).unwrap();
+            }
+            if let Some(outside) = outside {
+                new_blocks = new_blocks.push(outside).unwrap();
+            }
+        }
+        Some(Self { blocks: new_blocks })
     }
 
     // it's ok to have gaps where things are 0

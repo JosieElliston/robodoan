@@ -453,13 +453,14 @@ impl BitXor for PackedLayers {
 impl Mul<PackedLayers> for ElemId {
     type Output = PackedLayers;
 
+    #[inline(always)]
     fn mul(self, rhs: PackedLayers) -> Self::Output {
         let inv = self.inv();
-        let mut resulting_bits = 0_u16;
+        let mut ret = 0_u16;
         for g in [R, U, F, O] {
-            resulting_bits |= (rhs.bits_for_grip(inv * g) as u16) << (g.axis() * 4);
+            ret |= (rhs.bits_for_grip(inv * g) as u16) << (g.axis() * 4);
         }
-        PackedLayers::from_u16(resulting_bits)
+        PackedLayers::from_u16(ret)
     }
 }
 

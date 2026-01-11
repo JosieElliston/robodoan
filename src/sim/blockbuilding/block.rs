@@ -183,7 +183,7 @@ impl Block {
     }
 
     //// Returns `[inside, outside]`
-    #[inline(never)]
+    #[inline(always)]
     pub fn split(self, grip: GripId) -> [Option<Self>; 2] {
         self.layers.split(grip).map(|layers| {
             Some(Block {
