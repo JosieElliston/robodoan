@@ -197,7 +197,7 @@ impl BlockSet {
         // }
     }
 
-    fn old_premerged(&self, twist: Twist) -> Option<Self> {
+    fn old_premerged(self, twist: Twist) -> Option<Self> {
         Some(Self {
             blocks: StackVec::<Block, { crate::MAX_BLOCKS }>::from_iter(
                 self.blocks
@@ -208,22 +208,39 @@ impl BlockSet {
         })
     }
 
-    fn new_premerged(&self, twist: Twist) -> Option<Self> {
-        let mut new_blocks = StackVec::new();
-        for block in self.blocks {
-            let [inside, outside] = block.split(twist.grip);
-            let inside = inside.map(|b| Block {
-                layers: twist.transform * b.layers,
-                attitude: twist.transform * b.attitude,
-            });
-            if let Some(inside) = inside {
-                new_blocks = new_blocks.push(inside).unwrap();
-            }
-            if let Some(outside) = outside {
-                new_blocks = new_blocks.push(outside).unwrap();
+    fn new_premerged(mut self, twist: Twist) -> Option<Self> {
+        let len = self.blocks.len();
+        for i in 0..len {
+            let block = self.blocks[i];
+            let [inside, outside] = twist * block;
+            // let [inside, outside] = block.split(twist.grip);
+            // let inside = inside.map(|b| Block {
+            //     layers: twist.transform * b.layers,
+            //     attitude: twist.transform * b.attitude,
+            // });
+            // if let Some(inside) = inside {
+            //     new_blocks = new_blocks.push(inside).unwrap();
+            // }
+            // if let Some(outside) = outside {
+            //     new_blocks = new_blocks.push(outside).unwrap();
+            // }
+            match (inside, outside) {
+                (Some(inside), Some(outside)) => {
+                    self.blocks[i] = inside;
+                    self.blocks = self.blocks.push(outside).unwrap();
+                }
+                (Some(inside), None) => {
+                    self.blocks[i] = inside;
+                }
+                (None, Some(outside)) => {
+                    self.blocks[i] = outside;
+                }
+                (None, None) => {
+                    unreachable!()
+                }
             }
         }
-        Some(Self { blocks: new_blocks })
+        Some(self)
     }
 
     // it's ok to have gaps where things are 0

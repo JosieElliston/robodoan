@@ -272,6 +272,7 @@ impl fmt::Display for Block {
 impl Mul<Block> for Twist {
     type Output = [Option<Block>; 2];
 
+    #[inline(always)]
     fn mul(self, rhs: Block) -> Self::Output {
         let [inside, outside] = rhs.split(self.grip);
         [

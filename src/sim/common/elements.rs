@@ -73,12 +73,12 @@ impl ElemId {
     pub const IDENT: Self = IDENT;
 
     /// Returns the inverse element.
-    #[inline]
+    #[inline(always)]
     pub fn inv(self) -> ElemId {
         group::CHIRAL_BC4.inv_elem[self.0 as usize]
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn transform<T: TransformByElem>(self, obj: T) -> T {
         obj.transform_by(self)
     }
@@ -88,13 +88,13 @@ impl ElemId {
     /// # Panics
     ///
     /// Panics if `id` is out of range (must be less [`group::ELEM_COUNT`]).
-    #[inline]
+    #[inline(always)]
     pub const fn new(id: u8) -> Self {
         assert!(id < group::ELEM_COUNT as u8, "element ID out of range");
         Self(id)
     }
     /// Hint to the compiler that the grip ID is within bounds.
-    #[inline]
+    #[inline(always)]
     pub const fn hint_assert_in_bounds(self) {
         // SAFETY: `ElemId` is only ever constructed using `ElemId::new()`,
         // which panics if the ID is greater than or equal to
@@ -103,12 +103,12 @@ impl ElemId {
     }
 
     /// Returns the internal ID.
-    #[inline]
+    #[inline(always)]
     pub fn id(self) -> u8 {
         self.0
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn from_id(id: u8) -> Option<Self> {
         (id < group::ELEM_COUNT as u8).then_some(Self(id))
     }
@@ -118,7 +118,7 @@ impl ElemId {
     /// # Safety
     ///
     /// `id` must be strictly less than [`group::ELEM_COUNT`].
-    #[inline]
+    #[inline(always)]
     pub unsafe fn from_id_unchecked(id: u8) -> Self {
         Self(id)
     }
@@ -150,7 +150,7 @@ impl fmt::Display for ElemId {
 impl Mul for ElemId {
     type Output = ElemId;
 
-    #[inline]
+    #[inline(always)]
     fn mul(self, rhs: Self) -> Self::Output {
         self.hint_assert_in_bounds();
         rhs.hint_assert_in_bounds();
@@ -162,7 +162,7 @@ impl Mul for ElemId {
 impl Mul<Vec4> for ElemId {
     type Output = Vec4;
 
-    #[inline]
+    #[inline(always)]
     fn mul(self, rhs: Vec4) -> Self::Output {
         self.hint_assert_in_bounds();
         let mat = group::CHIRAL_BC4.mul_elem_vec[self.id() as usize];
@@ -175,7 +175,7 @@ pub trait TransformByElem {
 }
 
 impl TransformByElem for ElemId {
-    #[inline]
+    #[inline(always)]
     fn transform_by(self, elem: ElemId) -> Self {
         elem * self * elem.inv()
     }
