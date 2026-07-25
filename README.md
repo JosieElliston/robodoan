@@ -2,7 +2,7 @@
 
 Experimental blockbuilding-based search program for a [4D Rubik's cube](https://hypercubing.xyz/puzzles/3x3x3x3/)
 
-Currently, this solver is only able to complete F2L. I plan on adding OLC and PLC solvers in the future.
+This solver completes F2L by blockbuilding and then orients the last cell using algorithms found by search. PLC is not solved yet; see [Last cell](#last-cell).
 
 ## Performance
 
@@ -115,13 +115,89 @@ Each block is represented using 3 bytes:
 
 Since each block is represented using 3 bytes, we're able to fit a puzzle state containing **21** blocks (63 bytes) + length (1 byte) in exactly 64 bytes.
 
-### OLC + 2cPLC
+### Last cell
 
-I haven't started work on this yet.
+Once blockbuilding finishes, every piece outside one cell is solved and the
+remaining 26 pieces can only be moved by sequences that break F2L and then put
+it back. Those sequences are *algorithms*, and the solver finds them ahead of
+time rather than searching for them mid-solve.
 
-### RKT PLC
+#### Finding algorithms
 
-I haven't started work on this yet.
+Searching directly for F2L-preserving sequences is hopeless: there are 184
+twists, so even depth 8 is out of reach. Instead we meet in the middle, using a
+key that describes where the F2L pieces are while saying nothing about the last
+cell (`PuzzleState::f2l_key`). If two sequences reach states with the same key
+they have moved F2L to exactly the same place, so the first followed by the
+reverse of the second restores F2L and touches only the last cell. Enumerating
+to depth `d` from one side yields algorithms up to `2d` twists long.
+
+Two details make the table much richer for free:
+
+- **Rotations.** Rotating the whole puzzle about the last cell costs nothing, so
+  every algorithm found is closed under the 24 rotations that fix that cell. A
+  search using only `R` and the last cell therefore produces algorithms on all
+  six side grips.
+- **Two side grips.** No algorithm using a single side grip can misorient a 2c
+  piece, however deep you search — the 4D echo of 3D edge orientation surviving
+  `<R, L, U, D>`. So the default table runs two passes: one grip to depth 8, and
+  two grips to depth 6.
+
+#### Solving the last cell
+
+The search treats whole algorithms as moves and beam-searches over them. Twists
+of the last cell are algorithms too (they cost one move and preserve
+everything), so RKT-style setups fall out of the same mechanism instead of
+needing to be bolted on.
+
+A human splits OLC into three steps — 2c with EOLL algorithms, then 3c, then 4c
+— because each step has a *pure* algorithm touching one piece type. Those
+algorithms are 3D algorithms lifted through RKT, so a seven-move 3D sune becomes
+thirteen twists. Searching for genuinely 4D algorithms instead turns up much
+shorter ones, but they are never pure: **there is no algorithm within reach that
+twists 4c pieces while leaving 3c orientation alone**. So this solver orients
+every piece type against a single joint objective, which is what a human does
+for fewest-moves anyway.
+
+Falling short of a goal still keeps the progress made rather than discarding it,
+since an algorithm that orients most of what it touches is usually worth having.
+
+#### Status
+
+Building the default table takes about 25 seconds and yields ~1.7M algorithms;
+it is independent of the scramble, so one table serves every solve.
+
+On six random scrambles with the fast profile, OLC adds roughly 20 ETM on top of
+F2L, taking about 40 seconds (`cargo run --release --example end_to_end`):
+
+```text
+95  99  90  98  92  90   ETM total, mean 94.0
+```
+
+Two things are unfinished:
+
+- **The last misoriented piece.** The beam gets OLC down to one piece quickly
+  and then stops there — and it is *always* exactly one piece, across every run
+  so far bar one. That consistency says this is structural rather than bad luck.
+  `examples/probe.rs` shows part of the reason: from the state it stalls on,
+  *no* single algorithm in the whole table finishes, so the line has to pass
+  through states that look worse. Two things were tried. Reserving part of the
+  beam for those worse-looking states (`per_distance_cap` in `search.rs`) closed
+  one case and cut a few moves. Ranking ties by how many rows are already built
+  into bars made the search markedly faster but did not, on this sample, change
+  how often it finishes. What remains unknown is whether the last step needs a
+  wider beam, a different objective, or algorithms this table simply does not
+  contain — the last being most likely, given how reproducible the stall is.
+- **PLC.** Permuting the 2c pieces needs a 3-cycle that preserves all
+  orientation. The shortest ones known use wide moves, which this solver's move
+  set does not have, and every orientation-preserving algorithm in an 8-twist
+  table permutes the 2c pieces only as whole-cell rotations. A deeper or
+  wide-move-aware table would close this; the stage is already wired up and will
+  start working when the algorithms exist.
+
+What the solver aims to leave behind is a fully oriented 3×3×3 needing only its
+3c and 4c pieces permuted, which is exactly the input an ordinary 3^3 solver
+wants, lifted back through RKT.
 
 ## Representation
 

@@ -13,14 +13,22 @@ use meta::SolutionMetadata;
 pub use params::BlockBuildingSearchParams;
 pub use segment::{Segment, SegmentId, SegmentStore};
 
+use crate::lastcell::{AlgTable, LastCellSearchParams};
 use crate::sim::*;
 use crate::{MAX_SOLUTION_COUNT, Profile};
+
+/// How many of the best F2L solutions to try continuing into the last cell.
+///
+/// F2L solutions of the same length can leave wildly different last cells, and
+/// the search is cheap next to blockbuilding, so it pays to try several.
+const LAST_CELL_CANDIDATES: usize = 16;
 
 pub struct Solver {
     profile: Profile,
     puzzle: &'static Puzzle,
     params: BlockBuildingSearchParams,
     segments: SegmentStore,
+    last_cell_params: LastCellSearchParams,
 }
 impl Solver {
     pub fn new(profile: Profile, scramble: impl Into<Vec<Twist>>) -> Self {
@@ -34,10 +42,21 @@ impl Solver {
                 verbosity: 2,
             },
             segments: SegmentStore::new(scramble.into()),
+            last_cell_params: LastCellSearchParams::default(),
         }
     }
 
-    pub fn solve(mut self) -> Vec<Twist> {
+    /// Solves F2L only.
+    pub fn solve(self) -> Vec<Twist> {
+        self.solve_with_last_cell(None)
+    }
+
+    /// Solves F2L, then continues into the last cell if given an algorithm
+    /// table.
+    ///
+    /// Building the table takes far longer than a single solve, so it is passed
+    /// in rather than built here; one table serves every scramble.
+    pub fn solve_with_last_cell(mut self, alg_table: Option<&AlgTable>) -> Vec<Twist> {
         let start = std::time::Instant::now();
 
         // Keep the call graph flat for recursion.
@@ -63,33 +82,38 @@ impl Solver {
         println!("\nTotal elapsed time: {:?}", start.elapsed());
 
         println!();
-        let best_solution = *self
-            .segments
-            .best_solutions_so_far()
-            .unwrap()
-            .first()
-            .unwrap();
-        println!("Best solution: {}", self.segments[best_solution]);
-        let twists_of_best_solution = self.segments.solution_twists_for_segment(best_solution);
-        println!("{}", twists_of_best_solution.iter().join(" "));
-
         let mut initial_state = PuzzleState::default();
         initial_state.do_twists(&self.segments.scramble);
 
+        // Rank F2L solutions by length, then by how much of the last cell is
+        // already oriented. There can be a million of these, so the score has
+        // to stay cheap: it trusts the segment's recorded last layer rather
+        // than looking the frame up. Only the handful of candidates that go on
+        // to the last-cell search pay for the exact answer.
         let all_solutions = self
             .segments
             .best_solutions_so_far()
             .unwrap()
-            .iter()
+            .par_iter()
             .map(|&id| {
-                let segment = &self.segments[id];
                 let twists = self.segments.solution_twists_for_segment(id);
-                let mut state = initial_state.clone();
+                let mut state = initial_state;
                 state.do_twists(&twists);
-                let orientation_score = state.unoriented_pieces(segment.meta.last_layer());
+                let orientation_score =
+                    state.unoriented_pieces(self.segments[id].meta.last_layer());
                 (twists.len(), orientation_score, twists)
             })
-            .sorted();
+            .collect::<Vec<_>>()
+            .into_iter()
+            .sorted()
+            .collect_vec();
+
+        println!("Best F2L: {} ETM", all_solutions[0].0);
+
+        let solution = match alg_table {
+            None => all_solutions.first().unwrap().2.clone(),
+            Some(table) => self.continue_into_last_cell(initial_state, &all_solutions, table),
+        };
 
         let out_file_name = "out.txt";
         std::fs::write(
@@ -103,9 +127,63 @@ impl Solver {
                 .join("\n"),
         )
         .unwrap();
-        println!("All solutions written to {out_file_name}");
+        println!("All F2L solutions written to {out_file_name}");
 
-        twists_of_best_solution
+        solution
+    }
+
+    /// Runs the last-cell search on the most promising F2L solutions and keeps
+    /// whichever gives the shortest solve overall.
+    fn continue_into_last_cell(
+        &self,
+        initial_state: PuzzleState,
+        all_solutions: &[(usize, [usize; 3], Vec<Twist>)],
+        table: &AlgTable,
+    ) -> Vec<Twist> {
+        use crate::lastcell::{LastCellSolver, simplify_twists, twist_count};
+
+        let start = std::time::Instant::now();
+        let solver = LastCellSolver::new(
+            table,
+            LastCellSearchParams {
+                verbosity: 0,
+                ..self.last_cell_params.clone()
+            },
+        );
+
+        let candidates = all_solutions
+            .par_iter()
+            .take(LAST_CELL_CANDIDATES)
+            .map(|(_, _, f2l_twists)| {
+                let mut state = initial_state;
+                state.do_twists(f2l_twists);
+                let last_cell = solver.solve(&state);
+                let twists = simplify_twists(
+                    &f2l_twists
+                        .iter()
+                        .copied()
+                        .chain(last_cell.twists.iter().copied())
+                        .collect_vec(),
+                );
+                (
+                    twist_count(&twists),
+                    last_cell.residual.unoriented(),
+                    twists,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let (cost, unoriented, twists) = candidates
+            .into_iter()
+            .min_by_key(|(cost, unoriented, _)| (unoriented.iter().sum::<usize>(), *cost))
+            .expect("no F2L solutions");
+
+        println!(
+            "Last cell: {cost} ETM total, {} misoriented left ({:?})",
+            unoriented.iter().sum::<usize>(),
+            start.elapsed(),
+        );
+        twists
     }
 
     fn do_blockbuilding_stage<I: IntoIterator<Item = (Block, SolutionMetadata)>>(

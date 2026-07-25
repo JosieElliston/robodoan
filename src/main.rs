@@ -1,18 +1,22 @@
 use std::error::Error;
 
 use itertools::Itertools;
+use robodoan::lastcell::{AlgTable, AlgTableParams};
 use robodoan::*;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let profile = Profile::Short;
+
+    println!("Generating last-cell algorithms ...");
+    let alg_table = AlgTable::generate(&AlgTableParams::default());
 
     if let Some(filename) = std::env::args().nth(1) {
         let log_file_text = std::fs::read_to_string(&filename)?;
         let scramble: mc4d::Mc4dScramble = log_file_text.parse()?;
         println!("Loaded log file from {filename}");
         println!();
-        // let (solve_twists, _elapsed_time) = search_4d(scramble.scramble());
-        let solve_twists = robodoan::Solver::new(profile, scramble.scramble()).solve();
+        let solve_twists = robodoan::Solver::new(profile, scramble.scramble())
+            .solve_with_last_cell(Some(&alg_table));
         println!();
         std::fs::write("out.log", scramble.to_string(false, solve_twists))?;
         return Ok(());
@@ -24,12 +28,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("\n\n---- STARTING SEARCH #{} ----\n", i + 1);
         println!("Scramble: {}", scramble.iter().join(" "));
         let t = std::time::Instant::now();
-        let solution = robodoan::Solver::new(profile, scramble).solve();
-        results.push((solution.len(), t.elapsed()));
+        let solution =
+            robodoan::Solver::new(profile, scramble.clone()).solve_with_last_cell(Some(&alg_table));
+
+        // Check the answer against an independent simulation.
+        let mut state = PuzzleState::default();
+        state.do_twists(&scramble);
+        state.do_twists(&solution);
+        let remaining = (0..72).filter(|&i| !state.is_piece_solved(i)).count();
+        results.push((lastcell::twist_count(&solution), t.elapsed(), remaining));
     }
     println!("\n\n---- RESULTS ----\n");
-    for (move_count, time) in results {
-        println!("{move_count} ETM in {time:?}");
+    for (move_count, time, remaining) in results {
+        println!("{move_count} ETM in {time:?} ({remaining} pieces left unsolved)");
     }
 
     // // let scramble = RUBIKS_4D.random_moves(&mut rand::rng(), 100);

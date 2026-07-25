@@ -1,5 +1,6 @@
 #[macro_use]
 mod macros;
+pub mod lastcell;
 pub mod mc4d;
 pub mod search;
 pub mod sim;
