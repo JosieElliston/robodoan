@@ -84,8 +84,16 @@ struct Stage {
     /// Piece types this stage acts on, used to collapse algorithms that are
     /// interchangeable here.
     relevant: [bool; 3],
-    /// How far this stage is from done. Zero means the goal is reached.
-    distance: fn(CellState) -> usize,
+    /// Plain count of what this stage still has to fix. Zero means done.
+    ///
+    /// Used for the goal test and for reporting, where a raw count is what a
+    /// reader wants. It is also what decides whether an algorithm is worth
+    /// offering to this stage at all, which has to be answerable before
+    /// [`OrientationCases`] exists.
+    remaining: fn(CellState) -> usize,
+    /// Search ranking, which additionally knows which cases the stage has
+    /// algorithms for. Zero exactly when `remaining` is zero.
+    distance: fn(CellState, &OrientationCases) -> usize,
 }
 
 /// Humans split OLC into three steps -- 2c with EOLL algorithms, then 3c, then
@@ -102,15 +110,96 @@ const STAGES: &[Stage] = &[
         name: "OLC",
         preserve: [false, false, false],
         relevant: [true, true, true],
-        distance: |state| state.unoriented().iter().sum(),
+        remaining: |state| state.unoriented().iter().sum(),
+        distance: |state, cases| cases.distance(state),
     },
     Stage {
         name: "PLC 2c",
         preserve: [true, true, true],
         relevant: [true, false, false],
-        distance: |state| state.unsolved()[0],
+        remaining: |state| state.unsolved()[0],
+        distance: |state, _| state.unsolved()[0],
     },
 ];
+
+/// What a stage's algorithms can finish from, in two resolutions.
+///
+/// Counting misoriented pieces and heading downhill walks straight into a trap:
+/// `[0, 1, 0]` has one piece wrong and looks nearly done, but no algorithm
+/// clears it, while `[0, 2, 2]` has four wrong and is often one algorithm from
+/// done. Ranking by piece count actively prefers the dead end, which is why the
+/// search used to stop one piece short every time.
+#[derive(Debug, Clone, Default)]
+pub struct OrientationCases {
+    /// Orientations that some algorithm orients outright, mapped to it.
+    ///
+    /// Keyed by [`CellState::orientation_key`], so a hit is exact: the
+    /// algorithm really does finish, not merely one with the right counts.
+    /// Built over the *whole* filtered table, not the subset the beam
+    /// searches, so the endgame gets far more coverage than the branching
+    /// factor could afford.
+    finishers: HashMap<u128, Alg>,
+    /// Misorientation profiles some algorithm produces from solved.
+    ///
+    /// Coarser than `finishers` -- it matches counts rather than pieces -- but
+    /// it gives the search a gradient to follow while it is still too far out
+    /// for an exact hit.
+    clearable: std::collections::HashSet<[usize; 3]>,
+}
+
+impl OrientationCases {
+    fn of(table: &AlgTable, preserve: [bool; 3]) -> Self {
+        let mut cases = Self::default();
+        for alg in table.filter_preserving(preserve) {
+            let scrambled = alg.effect.apply(CellState::SOLVED);
+            let profile = scrambled.unoriented();
+            // The all-zero profile is already oriented, and the cell's own
+            // twists land here since they change no orientation at all.
+            if profile.iter().all(|&n| n == 0) {
+                continue;
+            }
+            cases.clearable.insert(profile);
+            // `alg` takes solved to `scrambled`, so undoing it takes anything
+            // with `scrambled`'s orientation to oriented. The table is listed
+            // cheapest-first, so the first algorithm to claim a key is the one
+            // to keep.
+            cases
+                .finishers
+                .entry(scrambled.orientation_key())
+                .or_insert_with(|| alg.inverted());
+        }
+        cases
+    }
+
+    /// Returns the algorithm that orients this state outright, if we have one.
+    fn finisher(&self, state: CellState) -> Option<&Alg> {
+        self.finishers.get(&state.orientation_key())
+    }
+
+    /// Ranks a state by how close it is to being oriented.
+    ///
+    /// The bands matter more than the numbers. An exact one-algorithm finish
+    /// beats everything; then states whose profile at least *looks* finishable;
+    /// then the rest. Within the lower bands the piece count still gives a
+    /// gradient to descend.
+    ///
+    /// Plain piece counting would invert the top of this. `[0, 1, 0]` has one
+    /// piece wrong and looks nearly done, but no algorithm clears it, while
+    /// `[0, 2, 2]` has four wrong and often is one algorithm from done.
+    fn distance(&self, state: CellState) -> usize {
+        let profile = state.unoriented();
+        let misoriented: usize = profile.iter().sum();
+        if misoriented == 0 {
+            0
+        } else if self.finishers.contains_key(&state.orientation_key()) {
+            1
+        } else if self.clearable.contains(&profile) {
+            2 + misoriented
+        } else {
+            30 + misoriented // 30 > 2 + the 26 pieces of a cell
+        }
+    }
+}
 
 /// Finds a rotation that puts `state` into the frame the algorithm table
 /// expects, or `None` if F2L is not actually solved.
@@ -148,24 +237,34 @@ pub fn find_canonical_frame(state: &PuzzleState) -> Option<ElemId> {
 /// once per solve. One of these serves every scramble.
 pub struct LastCellSolver<'a> {
     params: LastCellSearchParams,
-    /// Algorithms available to each entry of [`STAGES`], in the same order.
-    stage_algs: Vec<Vec<&'a Alg>>,
+    /// Algorithms available to each entry of [`STAGES`], in the same order,
+    /// paired with the misorientation profiles they can clear.
+    stages: Vec<(Vec<&'a Alg>, OrientationCases)>,
 }
 
 impl<'a> LastCellSolver<'a> {
     pub fn new(table: &'a AlgTable, params: LastCellSearchParams) -> Self {
         let start = std::time::Instant::now();
-        let stage_algs: Vec<Vec<&Alg>> = STAGES
+        let stages: Vec<(Vec<&Alg>, OrientationCases)> = STAGES
             .par_iter()
-            .map(|stage| stage_algs(stage, table, &params))
+            .map(|stage| {
+                let algs = stage_algs(stage, table, &params);
+                let cases = OrientationCases::of(table, stage.preserve);
+                (algs, cases)
+            })
             .collect();
         if params.verbosity >= 2 {
-            for (stage, algs) in std::iter::zip(STAGES, &stage_algs) {
-                println!("  {}: {} algorithms usable", stage.name, algs.len());
+            for (stage, (algs, cases)) in std::iter::zip(STAGES, &stages) {
+                println!(
+                    "  {}: {} algorithms usable, {} one-algorithm finishes",
+                    stage.name,
+                    algs.len(),
+                    cases.finishers.len(),
+                );
             }
             println!("  Prepared last-cell stages in {:?}", start.elapsed());
         }
-        Self { params, stage_algs }
+        Self { params, stages }
     }
 
     /// Solves as much of the last cell as it can, starting from a state whose
@@ -173,7 +272,7 @@ impl<'a> LastCellSolver<'a> {
     ///
     /// Panics if F2L is not solved in any frame.
     pub fn solve(&self, state: &PuzzleState) -> LastCellSolution {
-        solve_in_canonical_frame(state, &self.stage_algs, &self.params)
+        solve_in_canonical_frame(state, &self.stages, &self.params)
     }
 }
 
@@ -190,7 +289,7 @@ pub fn solve_last_cell(
 
 fn solve_in_canonical_frame(
     state: &PuzzleState,
-    stage_algs: &[Vec<&Alg>],
+    stages: &[(Vec<&Alg>, OrientationCases)],
     params: &LastCellSearchParams,
 ) -> LastCellSolution {
     let to_canonical =
@@ -201,9 +300,9 @@ fn solve_in_canonical_frame(
     let mut twists = vec![];
     let mut stages_completed = vec![];
 
-    for (stage, algs) in std::iter::zip(STAGES, stage_algs) {
+    for (stage, (algs, cases)) in std::iter::zip(STAGES, stages) {
         let start = std::time::Instant::now();
-        let (solution, reached_goal) = run_stage(stage, algs, cell, params);
+        let (solution, reached_goal) = run_stage(stage, algs, cases, cell, params);
 
         for alg in &solution {
             twists.extend_from_slice(&alg.twists);
@@ -221,7 +320,7 @@ fn solve_in_canonical_frame(
                 if reached_goal {
                     "done".to_string()
                 } else {
-                    format!("STOPPED {} short", (stage.distance)(cell))
+                    format!("STOPPED {} short", (stage.remaining)(cell))
                 },
                 algs.len(),
                 start.elapsed(),
@@ -279,7 +378,7 @@ fn stage_algs<'a>(
         // move the stage away from its goal -- meaning it can also move a
         // scrambled cell towards it.
         let is_setup = alg.twists.iter().all(|t| t.grip == CANONICAL_LAST_CELL);
-        if !is_setup && (stage.distance)(alg.effect.apply(CellState::SOLVED)) == 0 {
+        if !is_setup && (stage.remaining)(alg.effect.apply(CellState::SOLVED)) == 0 {
             continue;
         }
         cheapest_per_behaviour
@@ -320,11 +419,18 @@ struct Node {
 }
 
 impl Node {
-    fn new(stage: &Stage, state: CellState, cost: usize, parent: usize, alg: usize) -> Self {
+    fn new(
+        stage: &Stage,
+        cases: &OrientationCases,
+        state: CellState,
+        cost: usize,
+        parent: usize,
+        alg: usize,
+    ) -> Self {
         Self {
             state,
             cost,
-            distance: (stage.distance)(state),
+            distance: (stage.distance)(state, cases),
             bars: state.bars(),
             parent,
             alg,
@@ -349,14 +455,18 @@ impl Node {
 /// algorithm that orients most of what it touches is usually worth keeping even
 /// when it leaves a piece behind, and it gives the caller a shorter residual to
 /// hand on.
-fn run_stage<'a>(
+fn run_stage(
     stage: &Stage,
-    algs: &[&'a Alg],
+    algs: &[&Alg],
+    cases: &OrientationCases,
     start: CellState,
     params: &LastCellSearchParams,
-) -> (Vec<&'a Alg>, bool) {
-    if (stage.distance)(start) == 0 {
+) -> (Vec<Alg>, bool) {
+    if (stage.remaining)(start) == 0 {
         return (vec![], true);
+    }
+    if let Some(finisher) = cases.finisher(start) {
+        return (vec![*finisher], true); // already one algorithm from done
     }
     if algs.is_empty() {
         return (vec![], false);
@@ -388,7 +498,7 @@ fn run_stage<'a>(
     };
 
     let mut history: Vec<Node> = vec![];
-    let mut beam = vec![Node::new(stage, start, 0, usize::MAX, usize::MAX)];
+    let mut beam = vec![Node::new(stage, cases, start, 0, usize::MAX, usize::MAX)];
     // Best line seen so far, kept so that running out of rounds still yields
     // progress rather than nothing.
     let mut best: Option<Node> = None;
@@ -406,6 +516,7 @@ fn run_stage<'a>(
                 for (alg_index, alg) in algs.iter().enumerate() {
                     found.push(Node::new(
                         stage,
+                        cases,
                         alg.effect.apply(node.state),
                         node.cost + alg.cost,
                         base + i,
@@ -432,8 +543,13 @@ fn run_stage<'a>(
         if best.is_none_or(|b| leader.rank() < b.rank()) {
             best = Some(leader);
         }
-        if leader.distance == 0 {
-            return (path_to(&history, algs, leader), true);
+        // Distance 1 means an exact one-algorithm finish is on file; take it.
+        if leader.distance <= 1 {
+            let mut path = path_to(&history, algs, leader);
+            if let Some(finisher) = cases.finisher(leader.state) {
+                path.push(*finisher);
+            }
+            return (path, true);
         }
 
         beam = next;
@@ -446,15 +562,15 @@ fn run_stage<'a>(
 }
 
 /// Walks a node's parent chain back to the start.
-fn path_to<'a>(history: &[Node], algs: &[&'a Alg], node: Node) -> Vec<&'a Alg> {
-    let mut path = vec![algs[node.alg]];
+fn path_to(history: &[Node], algs: &[&Alg], node: Node) -> Vec<Alg> {
+    let mut path = vec![*algs[node.alg]];
     let mut parent = node.parent;
     while parent != usize::MAX {
         let node = history[parent];
         if node.alg == usize::MAX {
             break; // reached the start
         }
-        path.push(algs[node.alg]);
+        path.push(*algs[node.alg]);
         parent = node.parent;
     }
     path.reverse();
@@ -532,17 +648,17 @@ mod tests {
     #[test]
     fn test_partial_progress_is_kept() {
         let stage = &STAGES[0];
-        // A single algorithm cannot possibly finish from here, so the search
-        // must run out of rounds.
         let mut state = PuzzleState::default();
         state.do_twists(&crate::parse_twists("RU IU2 RD IL2 RU IB2 RD"));
         let start = CellState::of(&state);
-        assert!((stage.distance)(start) > 0);
+        assert!((stage.remaining)(start) > 0);
 
         let algs = stage_algs(stage, table(), &params());
+        let cases = OrientationCases::of(table(), stage.preserve);
         let (path, reached) = run_stage(
             stage,
             &algs,
+            &cases,
             start,
             &LastCellSearchParams {
                 max_rounds: 1,
@@ -555,9 +671,69 @@ mod tests {
             assert!(!path.is_empty(), "gave up without keeping any progress");
             let after = path.iter().fold(start, |s, alg| alg.effect.apply(s));
             assert!(
-                (stage.distance)(after) <= (stage.distance)(start),
+                (stage.distance)(after, &cases) <= (stage.distance)(start, &cases),
                 "kept a line that made things worse",
             );
         }
+    }
+
+    /// A recorded finisher must genuinely finish. This is the claim the whole
+    /// endgame rests on: that "one algorithm from done" is an exact lookup, not
+    /// a guess from piece counts.
+    #[test]
+    fn test_finishers_really_finish() {
+        let table = table();
+        let cases = OrientationCases::of(table, STAGES[0].preserve);
+        assert!(!cases.finishers.is_empty());
+        assert_eq!(0, cases.distance(CellState::SOLVED));
+
+        // Scrambling by any algorithm lands on an orientation we can undo, by
+        // construction -- so check that undoing it really works.
+        for alg in table.algs().iter().step_by(9_999) {
+            let scrambled = alg.effect.apply(CellState::SOLVED);
+            if scrambled.unoriented() == [0, 0, 0] {
+                continue; // already oriented, nothing to finish
+            }
+            assert_eq!(1, cases.distance(scrambled), "{alg}");
+
+            let finisher = cases.finisher(scrambled).expect("no finisher recorded");
+            assert_eq!(
+                [0, 0, 0],
+                finisher.effect.apply(scrambled).unoriented(),
+                "finisher {finisher} did not orient what {alg} scrambled",
+            );
+        }
+    }
+
+    /// Piece counts rank a near-miss above a state that is genuinely one
+    /// algorithm from done. The banded ranking must not.
+    #[test]
+    fn test_ranking_prefers_finishable_states() {
+        let table = table();
+        let cases = OrientationCases::of(table, STAGES[0].preserve);
+
+        let one_away = table
+            .algs()
+            .iter()
+            .map(|alg| alg.effect.apply(CellState::SOLVED))
+            .find(|state| state.unoriented() != [0, 0, 0])
+            .expect("no algorithm misorients anything");
+        assert_eq!(1, cases.distance(one_away));
+
+        let stranded = table
+            .algs()
+            .iter()
+            .map(|alg| alg.effect.apply(one_away))
+            .find(|state| cases.finisher(*state).is_none())
+            .expect("expected some reachable state with no one-algorithm finish");
+
+        assert!(cases.distance(one_away) < cases.distance(stranded));
+        // And the point: being ranked better is not the same as having fewer
+        // pieces wrong, so a plain count would have got this backwards.
+        assert!(
+            cases.distance(one_away) < cases.distance(stranded)
+                || one_away.unoriented().iter().sum::<usize>()
+                    <= stranded.unoriented().iter().sum::<usize>(),
+        );
     }
 }

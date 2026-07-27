@@ -167,33 +167,52 @@ since an algorithm that orients most of what it touches is usually worth having.
 Building the default table takes about 25 seconds and yields ~1.7M algorithms;
 it is independent of the scramble, so one table serves every solve.
 
-On six random scrambles with the fast profile, OLC adds roughly 20 ETM on top of
-F2L, taking about 40 seconds (`cargo run --release --example end_to_end`):
+On six random scrambles with the fast profile, OLC finishes every time and adds
+roughly 25 ETM on top of F2L, taking under 30 seconds
+(`cargo run --release --example end_to_end`):
 
 ```text
-95  99  90  98  92  90   ETM total, mean 94.0
+94  93  98  95  93  95   ETM total, mean 94.7, all fully oriented
 ```
 
-Two things are unfinished:
+#### Ranking states, and the trap in counting pieces
 
-- **The last misoriented piece.** The beam gets OLC down to one piece quickly
-  and then stops there — and it is *always* exactly one piece, across every run
-  so far bar one. That consistency says this is structural rather than bad luck.
-  `examples/probe.rs` shows part of the reason: from the state it stalls on,
-  *no* single algorithm in the whole table finishes, so the line has to pass
-  through states that look worse. Two things were tried. Reserving part of the
-  beam for those worse-looking states (`per_distance_cap` in `search.rs`) closed
-  one case and cut a few moves. Ranking ties by how many rows are already built
-  into bars made the search markedly faster but did not, on this sample, change
-  how often it finishes. What remains unknown is whether the last step needs a
-  wider beam, a different objective, or algorithms this table simply does not
-  contain — the last being most likely, given how reproducible the stall is.
-- **PLC.** Permuting the 2c pieces needs a 3-cycle that preserves all
-  orientation. The shortest ones known use wide moves, which this solver's move
-  set does not have, and every orientation-preserving algorithm in an 8-twist
-  table permutes the 2c pieces only as whole-cell rotations. A deeper or
-  wide-move-aware table would close this; the stage is already wired up and will
-  start working when the algorithms exist.
+Getting OLC to finish at all turned on how states are ranked. Counting
+misoriented pieces and heading downhill *reliably* stopped one piece short,
+every single run. The reason is that the count is the wrong measure:
+`[0, 1, 0]` has one piece wrong and looks nearly done, but no algorithm clears
+it, while `[0, 2, 2]` has four wrong and is often a single algorithm from done.
+Piece counting actively prefers the dead end.
+
+So `OrientationCases` ranks by what the algorithms can actually do, at two
+resolutions:
+
+1. Exactly one algorithm away. `CellState::orientation_key` packs which way
+   every piece's last-cell sticker points. Orientation evolves on its own — an
+   algorithm sends the sticker at `j` to `attitude[j] * (sticker at source[j])`,
+   which depends on the incoming orientation and nothing else — so two states
+   with the same key are oriented by the same algorithms. That makes "am I one
+   algorithm from done?" an exact hash lookup, built over the *whole* table
+   rather than the subset the beam can afford to branch on.
+2. Otherwise, whether the `[ridges, edges, corners]` profile is one some
+   algorithm produces at all. Coarser, but it gives the search a gradient to
+   follow while it is still too far out for an exact hit.
+
+Two smaller things also help. The beam reserves part of itself for
+worse-looking states (`per_distance_cap`), since the endgame needs uphill moves.
+And ties are broken by how many of the cell's 24 rows are already built into
+bars — a row is a bar when its three pieces share one attitude, so they sit
+rigidly together and an algorithm can carry them as a unit. That is
+blockbuilding, just inside the last cell.
+
+#### Still unfinished
+
+**PLC.** Permuting the 2c pieces needs a 3-cycle that preserves all orientation.
+The shortest ones known use wide moves, which this solver's move set does not
+have, and every orientation-preserving algorithm in an 8-twist table permutes
+the 2c pieces only as whole-cell rotations. The stage does make partial progress
+now that OLC finishes — 2c unsolved counts drop from six to two or three — but it
+does not close. A deeper or wide-move-aware table would fix this.
 
 What the solver aims to leave behind is a fully oriented 3×3×3 needing only its
 3c and 4c pieces permuted, which is exactly the input an ordinary 3^3 solver

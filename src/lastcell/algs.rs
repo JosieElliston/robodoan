@@ -39,6 +39,16 @@ pub struct Alg {
     pub cost: usize,
 }
 
+impl Alg {
+    /// Returns the algorithm that undoes this one.
+    ///
+    /// Costs the same, and is usually in the table already -- but not always,
+    /// so the effect is recomputed rather than looked up.
+    pub fn inverted(&self) -> Self {
+        build_alg(invert_twists(&self.twists)).expect("undoing an algorithm preserves F2L")
+    }
+}
+
 impl fmt::Display for Alg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:2} ETM  {}", self.cost, self.twists.iter().join(" "))

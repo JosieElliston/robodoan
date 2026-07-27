@@ -140,6 +140,20 @@ impl CellState {
         .map(|kind| kind.iter().filter(|&&j| !self.is_piece_oriented(j)).count())
     }
 
+    /// Packs which way every piece's last-cell sticker points into one integer.
+    ///
+    /// Orientation evolves on its own: an algorithm sends the sticker at `j` to
+    /// `attitude[j] * (sticker at source[j])`, which depends on the incoming
+    /// orientation and nothing else. So two states with the same key stay in
+    /// step under any algorithm, and one algorithm orients both or neither --
+    /// which is what makes "am I one algorithm from done?" an exact table
+    /// lookup rather than a guess from piece counts.
+    pub fn orientation_key(self) -> u128 {
+        (0..26).fold(0, |key, j| {
+            key << 3 | (self.0[j] * CANONICAL_LAST_CELL).id() as u128
+        })
+    }
+
     /// Returns how many of the cell's 24 rows are built into bars.
     ///
     /// A row is a bar when its three pieces share one attitude, i.e. when they
