@@ -164,8 +164,14 @@ since an algorithm that orients most of what it touches is usually worth having.
 
 #### Status
 
-Building the default table takes about 25 seconds and yields ~1.7M algorithms;
-it is independent of the scramble, so one table serves every solve.
+Building the default table takes about 25 seconds and yields ~1.7M algorithms.
+It is independent of the scramble, so one table serves every solve, and
+`AlgTable::load_or_generate` keeps it in `alg_table.bin` between runs — 27 MB,
+and 0.65 s to load instead of 26 s to build. Only the twists are stored; the
+effect on the last cell and the move count are recomputed on load, which keeps
+the file small and means a corrupt one cannot smuggle in an algorithm that
+fails to preserve F2L. The file records a fingerprint of the parameters it was
+built for and is regenerated if they change.
 
 On six random scrambles with the fast profile, OLC finishes every time and adds
 roughly 25 ETM on top of F2L, taking under 30 seconds

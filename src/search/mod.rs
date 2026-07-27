@@ -165,24 +165,25 @@ impl Solver {
                         .chain(last_cell.twists.iter().copied())
                         .collect_vec(),
                 );
-                (
-                    twist_count(&twists),
-                    last_cell.residual.unoriented(),
-                    twists,
-                )
+                (twist_count(&twists), twists, last_cell)
             })
             .collect::<Vec<_>>();
 
-        let (cost, unoriented, twists) = candidates
+        let (cost, twists, last_cell) = candidates
             .into_iter()
-            .min_by_key(|(cost, unoriented, _)| (unoriented.iter().sum::<usize>(), *cost))
+            .min_by_key(|(cost, _, last_cell)| {
+                (last_cell.residual.unoriented().iter().sum::<usize>(), *cost)
+            })
             .expect("no F2L solutions");
 
         println!(
-            "Last cell: {cost} ETM total, {} misoriented left ({:?})",
-            unoriented.iter().sum::<usize>(),
+            "Last cell: {} algorithms, {} ETM ({cost} ETM total), {} misoriented left ({:?})",
+            last_cell.steps.len(),
+            last_cell.cost,
+            last_cell.residual.unoriented().iter().sum::<usize>(),
             start.elapsed(),
         );
+        println!("{}", last_cell.trace());
         twists
     }
 

@@ -1,14 +1,13 @@
 use std::error::Error;
 
 use itertools::Itertools;
-use robodoan::lastcell::{AlgTable, AlgTableParams};
+use robodoan::lastcell::{AlgTable, AlgTableParams, DEFAULT_CACHE_PATH};
 use robodoan::*;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let profile = Profile::Short;
 
-    println!("Generating last-cell algorithms ...");
-    let alg_table = AlgTable::generate(&AlgTableParams::default());
+    let alg_table = AlgTable::load_or_generate(DEFAULT_CACHE_PATH, &AlgTableParams::default());
 
     if let Some(filename) = std::env::args().nth(1) {
         let log_file_text = std::fs::read_to_string(&filename)?;

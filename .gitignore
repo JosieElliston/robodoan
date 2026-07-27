@@ -3,3 +3,4 @@
 *.log
 flamegraph.svg
 /out.txt
+/alg_table.bin

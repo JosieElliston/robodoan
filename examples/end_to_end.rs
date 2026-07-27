@@ -7,10 +7,13 @@ use robodoan::*;
 
 fn main() {
     let trials: u64 = std::env::args().nth(1).map_or(3, |s| s.parse().unwrap());
-    let table = AlgTable::generate(&AlgTableParams {
-        verbosity: 1,
-        ..Default::default()
-    });
+    let table = AlgTable::load_or_generate(
+        DEFAULT_CACHE_PATH,
+        &AlgTableParams {
+            verbosity: 1,
+            ..Default::default()
+        },
+    );
 
     let mut rows = vec![];
     for seed in 0..trials {

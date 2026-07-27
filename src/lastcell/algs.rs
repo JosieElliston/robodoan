@@ -14,7 +14,10 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::hash::{BuildHasher, RandomState};
+use std::hash::{BuildHasher, Hash, Hasher, RandomState};
+use std::io::Write;
+use std::path::Path;
+use std::{fs, io};
 
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -190,6 +193,138 @@ impl AlgTable {
 
         Self { algs }
     }
+}
+
+/// Default place to keep the generated table between runs.
+pub const DEFAULT_CACHE_PATH: &str = "alg_table.bin";
+
+const CACHE_MAGIC: &[u8; 8] = b"ROBODOAN";
+const CACHE_VERSION: u32 = 1;
+
+impl AlgTable {
+    /// Loads the table from `path`, generating and saving it if that is missing
+    /// or was built for different parameters.
+    ///
+    /// Generating takes far longer than any single solve, and the result
+    /// depends only on the parameters, so it is worth keeping around.
+    pub fn load_or_generate(path: impl AsRef<Path>, params: &AlgTableParams) -> Self {
+        let path = path.as_ref();
+        match Self::load(path, params) {
+            Ok(Some(table)) => {
+                if params.verbosity >= 1 {
+                    println!(
+                        "  Alg table: {} algorithms loaded from {}",
+                        table.len(),
+                        path.display(),
+                    );
+                }
+                return table;
+            }
+            Ok(None) => {} // no cache, or built for other parameters
+            Err(e) => eprintln!("  Ignoring unreadable alg table {}: {e}", path.display()),
+        }
+
+        let table = Self::generate(params);
+        if let Err(e) = table.save(path, params) {
+            eprintln!("  Could not save alg table to {}: {e}", path.display());
+        } else if params.verbosity >= 1 {
+            println!("  Alg table saved to {}", path.display());
+        }
+        table
+    }
+
+    /// Writes the table's algorithms to `path`.
+    ///
+    /// Only the twists are stored. Everything else -- the effect on the last
+    /// cell, the move count -- is derived from them on load, which keeps the
+    /// file about a fifth the size of the table in memory and means a corrupt
+    /// file cannot smuggle in an algorithm that does not preserve F2L.
+    pub fn save(&self, path: impl AsRef<Path>, params: &AlgTableParams) -> io::Result<()> {
+        let mut out = io::BufWriter::new(fs::File::create(path)?);
+        out.write_all(CACHE_MAGIC)?;
+        out.write_all(&CACHE_VERSION.to_le_bytes())?;
+        out.write_all(&fingerprint(params).to_le_bytes())?;
+        out.write_all(&(self.algs.len() as u64).to_le_bytes())?;
+        for alg in &self.algs {
+            out.write_all(&[alg.twists.len() as u8])?;
+            for twist in &alg.twists {
+                out.write_all(&[twist.grip.id(), twist.transform.id()])?;
+            }
+        }
+        out.flush()
+    }
+
+    /// Reads a table back, or returns `None` if it is absent or was built for
+    /// different parameters.
+    pub fn load(path: impl AsRef<Path>, params: &AlgTableParams) -> io::Result<Option<Self>> {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut rest = bytes.as_slice();
+
+        let mut take = |n: usize| -> io::Result<&[u8]> {
+            if rest.len() < n {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "truncated"));
+            }
+            let (head, tail) = rest.split_at(n);
+            rest = tail;
+            Ok(head)
+        };
+
+        if take(8)? != CACHE_MAGIC {
+            return Ok(None); // not one of ours
+        }
+        if u32::from_le_bytes(take(4)?.try_into().unwrap()) != CACHE_VERSION {
+            return Ok(None); // written by an older format
+        }
+        if u64::from_le_bytes(take(8)?.try_into().unwrap()) != fingerprint(params) {
+            return Ok(None); // built for different parameters
+        }
+        let count = u64::from_le_bytes(take(8)?.try_into().unwrap()) as usize;
+
+        // Slice out each algorithm's twists first, then rebuild in parallel:
+        // rebuilding replays every algorithm to recover its effect, which is
+        // the expensive half.
+        let mut sequences = Vec::with_capacity(count);
+        for _ in 0..count {
+            let len = take(1)?[0] as usize;
+            let packed = take(2 * len)?;
+            sequences.push(
+                packed
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|t| Some(Twist::new(GripId::try_new(t[0])?, ElemId::from_id(t[1])?)))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad twist"))?,
+            );
+        }
+
+        let algs = sequences
+            .into_par_iter()
+            .map(build_alg)
+            .collect::<Option<Vec<Alg>>>()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "algorithm does not preserve F2L",
+                )
+            })?;
+        Ok(Some(Self { algs }))
+    }
+}
+
+/// Identifies the parameters that affect what gets generated.
+///
+/// Deliberately excludes verbosity, which changes nothing about the result.
+fn fingerprint(params: &AlgTableParams) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    CACHE_VERSION.hash(&mut hasher);
+    params.passes.hash(&mut hasher);
+    params.max_bucket.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Groups every sequence up to `half_depth` twists by where it leaves F2L.
@@ -450,6 +585,56 @@ mod tests {
                 assert!(grips.contains(&g), "no algorithm uses {g}");
             }
         }
+    }
+
+    /// A cached table must come back exactly as it went in, and must be
+    /// rejected rather than trusted when it was built for other parameters.
+    #[test]
+    fn test_cache_round_trip() {
+        let dir = std::env::temp_dir().join("robodoan-alg-cache-test");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("table.bin");
+        let _ = fs::remove_file(&path);
+
+        let params = AlgTableParams {
+            passes: vec![AlgPass {
+                grips: vec![R, U],
+                half_depth: 3,
+            }],
+            verbosity: 0,
+            ..Default::default()
+        };
+        let table = small_table();
+
+        assert!(AlgTable::load(&path, &params).unwrap().is_none()); // nothing yet
+        table.save(&path, &params).unwrap();
+
+        let loaded = AlgTable::load(&path, &params).unwrap().expect("no table");
+        assert_eq!(table.len(), loaded.len());
+        for (before, after) in std::iter::zip(table.algs(), loaded.algs()) {
+            assert_eq!(before, after);
+        }
+
+        // Different parameters must not silently reuse the file.
+        let other = AlgTableParams {
+            passes: vec![AlgPass {
+                grips: vec![R],
+                half_depth: 2,
+            }],
+            ..params.clone()
+        };
+        assert!(AlgTable::load(&path, &other).unwrap().is_none());
+
+        // Neither must a file that is not ours, or one that got truncated.
+        fs::write(&path, b"not an alg table").unwrap();
+        assert!(AlgTable::load(&path, &params).unwrap().is_none());
+        table.save(&path, &params).unwrap();
+        let mut truncated = fs::read(&path).unwrap();
+        truncated.truncate(truncated.len() / 2);
+        fs::write(&path, &truncated).unwrap();
+        assert!(AlgTable::load(&path, &params).is_err());
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// An algorithm that "preserves" a piece type must keep that type oriented

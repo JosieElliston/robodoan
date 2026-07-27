@@ -56,11 +56,49 @@ pub struct LastCellSolution {
     pub residual: CellState,
     /// Names of the stages that reached their goal, in order.
     pub stages_completed: Vec<&'static str>,
+    /// One entry per algorithm applied, in order.
+    pub steps: Vec<LastCellStep>,
+}
+
+/// One algorithm of a last-cell solution, and what it did.
+///
+/// Recorded rather than printed because candidates are searched in parallel, so
+/// only the winner's trace is worth showing and it has to survive the race.
+#[derive(Debug, Clone)]
+pub struct LastCellStep {
+    pub stage: &'static str,
+    pub alg: Alg,
+    /// Misoriented `[ridges, edges, corners]` before and after.
+    pub unoriented: [[usize; 3]; 2],
+    /// Unsolved `[ridges, edges, corners]` before and after.
+    pub unsolved: [[usize; 3]; 2],
+}
+
+impl fmt::Display for LastCellStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [before, after] = self.unoriented;
+        let [was, now] = self.unsolved;
+        write!(
+            f,
+            "{:8} unoriented {before:?} -> {after:?}  unsolved {was:?} -> {now:?}  {}",
+            self.stage, self.alg,
+        )
+    }
 }
 
 impl LastCellSolution {
     pub fn is_cell_solved(&self) -> bool {
         self.residual.is_solved()
+    }
+
+    /// Returns a line per algorithm applied, for working out where the moves
+    /// went.
+    pub fn trace(&self) -> String {
+        self.steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| format!("  {:2}. {step}", i + 1))
+            .join("\n")
     }
 }
 
@@ -299,14 +337,22 @@ fn solve_in_canonical_frame(
     let mut cell = CellState::of(&canonical);
     let mut twists = vec![];
     let mut stages_completed = vec![];
+    let mut steps = vec![];
 
     for (stage, (algs, cases)) in std::iter::zip(STAGES, stages) {
         let start = std::time::Instant::now();
         let (solution, reached_goal) = run_stage(stage, algs, cases, cell, params);
 
         for alg in &solution {
+            let before = cell;
             twists.extend_from_slice(&alg.twists);
             cell = alg.effect.apply(cell);
+            steps.push(LastCellStep {
+                stage: stage.name,
+                alg: *alg,
+                unoriented: [before.unoriented(), cell.unoriented()],
+                unsolved: [before.unsolved(), cell.unsolved()],
+            });
         }
         if reached_goal {
             stages_completed.push(stage.name);
@@ -350,6 +396,7 @@ fn solve_in_canonical_frame(
         twists,
         residual: cell,
         stages_completed,
+        steps,
     }
 }
 
@@ -407,6 +454,8 @@ fn stage_algs<'a>(
 struct Node {
     state: CellState,
     cost: usize,
+    /// `cost` plus what it would take to finish from here, when that is known.
+    projected_cost: usize,
     /// How far this node is from the stage's goal, cached because it is read
     /// once per sort comparison.
     distance: usize,
@@ -430,6 +479,11 @@ impl Node {
         Self {
             state,
             cost,
+            // Charge for the finish now rather than discovering it later.
+            // Otherwise two states both one algorithm from done look equally
+            // good while one is finished by four twists and the other by
+            // eight, and the search happily picks the expensive one.
+            projected_cost: cost + cases.finisher(state).map_or(0, |alg| alg.cost),
             distance: (stage.distance)(state, cases),
             bars: state.bars(),
             parent,
@@ -437,14 +491,18 @@ impl Node {
         }
     }
 
-    /// Closer to the goal first, then more bars, then cheaper.
+    /// Closer to the goal first, then cheaper all-in, then more bars.
     ///
     /// Bars break ties rather than driving the search: the algorithms worth
-    /// using move whole rows at once, so among states that are equally close,
-    /// the one whose rows are already built is the one an algorithm can finish
-    /// from.
-    fn rank(&self) -> (usize, std::cmp::Reverse<usize>, usize) {
-        (self.distance, std::cmp::Reverse(self.bars), self.cost)
+    /// using move whole rows at once, so among states that are equally close
+    /// and equally cheap, the one whose rows are already built is the one an
+    /// algorithm can finish from.
+    fn rank(&self) -> (usize, usize, std::cmp::Reverse<usize>) {
+        (
+            self.distance,
+            self.projected_cost,
+            std::cmp::Reverse(self.bars),
+        )
     }
 }
 

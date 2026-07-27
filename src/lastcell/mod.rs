@@ -20,7 +20,7 @@ use crate::sim::*;
 mod algs;
 mod search;
 
-pub use algs::{Alg, AlgPass, AlgTable, AlgTableParams};
+pub use algs::{Alg, AlgPass, AlgTable, AlgTableParams, DEFAULT_CACHE_PATH};
 pub use search::{
     LastCellSearchParams, LastCellSolution, LastCellSolver, find_canonical_frame, solve_last_cell,
 };
