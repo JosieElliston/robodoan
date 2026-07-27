@@ -37,6 +37,7 @@ fn main() {
                     max_algs_per_stage: 40_000,
                     max_rounds: 20,
                     verbosity: 0,
+                    ..Default::default()
                 },
             ),
         ] {

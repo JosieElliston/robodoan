@@ -26,6 +26,24 @@ pub struct LastCellSearchParams {
     pub max_algs_per_stage: usize,
     /// Give up on a stage after this many algorithms in a row.
     pub max_rounds: usize,
+    /// How many algorithms iterative deepening may branch over.
+    ///
+    /// Much smaller than the beam's set: each extra ply multiplies the work by
+    /// this, and the finisher table already supplies the last ply from the full
+    /// table.
+    pub ids_algs: usize,
+    /// Largest twist budget iterative deepening will try before giving up and
+    /// handing over to the beam.
+    pub max_ids_cost: usize,
+    /// Most algorithms an iterative-deepening answer may use, counting the
+    /// finisher.
+    ///
+    /// A budget alone is not enough of a leash. Deepening bounds the plies --
+    /// budget `B` buys at most `B` of them -- but the cell's own rotations cost
+    /// one move each, so a budget of twelve still admits around `23^11` nodes.
+    /// Bounded, but hopeless. The work is `ids_algs^(max_ids_algs - 1)` per
+    /// budget, so each step up here is expensive.
+    pub max_ids_algs: usize,
     pub verbosity: u8,
 }
 
@@ -35,6 +53,9 @@ impl Default for LastCellSearchParams {
             beam_width: 100,
             max_algs_per_stage: 6_000,
             max_rounds: 10,
+            ids_algs: 600,
+            max_ids_cost: 20,
+            max_ids_algs: 3,
             verbosity: 2,
         }
     }
@@ -506,7 +527,8 @@ impl Node {
     }
 }
 
-/// Beam search over whole algorithms until the stage's distance hits zero.
+/// Searches a stage, trying for a shortest answer before settling for a good
+/// one.
 ///
 /// Returns the algorithms to apply and whether the goal was actually reached.
 /// Falling short still returns the best line found rather than nothing: an
@@ -523,11 +545,164 @@ fn run_stage(
     if (stage.remaining)(start) == 0 {
         return (vec![], true);
     }
-    if let Some(finisher) = cases.finisher(start) {
-        return (vec![*finisher], true); // already one algorithm from done
-    }
     if algs.is_empty() {
         return (vec![], false);
+    }
+    if let Some(found) = run_iterative_deepening(stage, algs, cases, start, params) {
+        return (found, true);
+    }
+    run_beam(stage, algs, cases, start, params)
+}
+
+/// Iterative deepening on the twist budget.
+///
+/// Deepening on move count rather than algorithm count is what makes the answer
+/// worth having: the first budget that admits any solution admits only optimal
+/// ones, so what comes back is the shortest line in ETM, not merely the one
+/// using fewest algorithms. Three cheap algorithms often beat two expensive
+/// ones and this notices.
+///
+/// The finisher table does the heavy lifting. It answers "does one algorithm
+/// out of the whole million-entry table finish from here?" exactly and in O(1),
+/// so it is checked at every node -- effectively a free last ply drawn from a
+/// far larger set than the search itself could branch over.
+///
+/// It still runs out of room: each extra ply multiplies the work by the
+/// algorithm set, so states needing a long line fall through to the beam.
+fn run_iterative_deepening(
+    stage: &Stage,
+    algs: &[&Alg],
+    cases: &OrientationCases,
+    start: CellState,
+    params: &LastCellSearchParams,
+) -> Option<Vec<Alg>> {
+    // Only the orientation stages have a finisher table to lean on.
+    if cases.finishers.is_empty() {
+        return None;
+    }
+    // Sorted by cost, so a branch that is already too expensive means every
+    // later one is too. Each is tagged as a setup (a bare rotation of the cell)
+    // because chaining those has to be forbidden -- see `finish_within_budget`.
+    let searched: Vec<(&Alg, bool)> = algs
+        .iter()
+        .copied()
+        .take(params.ids_algs)
+        .map(|alg| {
+            let is_setup = alg.twists.iter().all(|t| t.grip == CANONICAL_LAST_CELL);
+            (alg, is_setup)
+        })
+        .collect();
+    debug_assert!(searched.windows(2).all(|w| w[0].0.cost <= w[1].0.cost));
+
+    for budget in 1..=params.max_ids_cost {
+        let start_time = std::time::Instant::now();
+        // Fan out on the first algorithm; the rest recurses serially.
+        let found = cases
+            .finisher(start)
+            .filter(|finisher| finisher.cost <= budget)
+            .map(|finisher| vec![*finisher])
+            .or_else(|| {
+                searched
+                    .par_iter()
+                    .filter(|(alg, _)| alg.cost < budget)
+                    .find_map_any(|&(first, is_setup)| {
+                        let mut path = vec![*first];
+                        finish_within_budget(
+                            cases,
+                            &searched,
+                            first.effect.apply(start),
+                            budget - first.cost,
+                            // One ply is spent on `first`, and the last is
+                            // always the finisher.
+                            params.max_ids_algs.saturating_sub(2),
+                            is_setup,
+                            &mut path,
+                        )
+                        .then_some(path)
+                    })
+            });
+
+        if params.verbosity >= 3 {
+            println!(
+                "      budget {budget} ETM: {} ({:?})",
+                if found.is_some() { "found" } else { "no" },
+                start_time.elapsed(),
+            );
+        }
+        if let Some(path) = found {
+            debug_assert_eq!(
+                0,
+                (stage.remaining)(path.iter().fold(start, |s, a| a.effect.apply(s))),
+                "iterative deepening returned a line that does not finish",
+            );
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Extends `path` until the stage is finished without exceeding `budget`.
+///
+/// Returns whether it managed to, leaving the line in `path`.
+fn finish_within_budget(
+    cases: &OrientationCases,
+    algs: &[(&Alg, bool)],
+    state: CellState,
+    budget: usize,
+    plies_left: usize,
+    previous_was_setup: bool,
+    path: &mut Vec<Alg>,
+) -> bool {
+    if let Some(finisher) = cases.finisher(state)
+        && finisher.cost <= budget
+    {
+        path.push(*finisher);
+        return true;
+    }
+    if plies_left == 0 {
+        return false;
+    }
+
+    for &(alg, is_setup) in algs {
+        // Every algorithm costs at least one, and so does the finisher, so a
+        // branch needs strictly less than the budget to leave room to end.
+        if alg.cost >= budget {
+            break; // sorted by cost: nothing later fits either
+        }
+        // Two rotations of the cell in a row compose into a single rotation,
+        // which is already in the set. Without this the one-move rotations sit
+        // at the front of the list and the search disappears into chains of
+        // them -- twenty-three branches per ply, all of them redundant.
+        if is_setup && previous_was_setup {
+            continue;
+        }
+        path.push(*alg);
+        if finish_within_budget(
+            cases,
+            algs,
+            alg.effect.apply(state),
+            budget - alg.cost,
+            plies_left - 1,
+            is_setup,
+            path,
+        ) {
+            return true;
+        }
+        path.pop();
+    }
+    false
+}
+
+/// Beam search over whole algorithms until the stage's distance hits zero.
+fn run_beam(
+    stage: &Stage,
+    algs: &[&Alg],
+    cases: &OrientationCases,
+    start: CellState,
+    params: &LastCellSearchParams,
+) -> (Vec<Alg>, bool) {
+    if let Some(finisher) = cases.finisher(start) {
+        return (vec![*finisher], true); // already one algorithm from done
     }
 
     // Trim in bulk rather than after every push; the slack keeps enough
@@ -723,6 +898,7 @@ mod tests {
                 beam_width: 20,
                 max_algs_per_stage: 500,
                 verbosity: 0,
+                ..Default::default()
             },
         );
         if !reached {
