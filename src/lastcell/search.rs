@@ -35,6 +35,12 @@ pub struct LastCellSearchParams {
     /// Largest twist budget iterative deepening will try before giving up and
     /// handing over to the beam.
     pub max_ids_cost: usize,
+    /// How many algorithms the backward half of the meet-in-the-middle pairs
+    /// up.
+    ///
+    /// Costs `backward_algs^2` to build and roughly that many table entries, so
+    /// it trades memory and startup time for forward reach.
+    pub backward_algs: usize,
     /// Most algorithms an iterative-deepening answer may use, counting the
     /// finisher.
     ///
@@ -56,6 +62,7 @@ impl Default for LastCellSearchParams {
             ids_algs: 600,
             max_ids_cost: 20,
             max_ids_algs: 3,
+            backward_algs: 1_500,
             verbosity: 2,
         }
     }
@@ -188,16 +195,38 @@ const STAGES: &[Stage] = &[
 /// clears it, while `[0, 2, 2]` has four wrong and is often one algorithm from
 /// done. Ranking by piece count actively prefers the dead end, which is why the
 /// search used to stop one piece short every time.
+/// A stored way to finish, as indices into [`OrientationCases::finish_algs`].
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct Finish {
+    first: u32,
+    /// [`u32::MAX`] when one algorithm is enough.
+    second: u32,
+    cost: u32,
+}
+
+impl Finish {
+    const NONE: u32 = u32::MAX;
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OrientationCases {
-    /// Orientations that some algorithm orients outright, mapped to it.
+    /// Algorithms that appear in a finish, already inverted so they can be
+    /// applied as-is.
+    finish_algs: Vec<Alg>,
+    /// Orientations that one or two algorithms orient outright.
     ///
-    /// Keyed by [`CellState::orientation_key`], so a hit is exact: the
-    /// algorithm really does finish, not merely one with the right counts.
-    /// Built over the *whole* filtered table, not the subset the beam
-    /// searches, so the endgame gets far more coverage than the branching
-    /// factor could afford.
-    finishers: HashMap<u128, Alg>,
+    /// This is the backward half of a meet-in-the-middle. Keyed by
+    /// [`CellState::orientation_key`], so a hit is exact -- these algorithms
+    /// really do finish, not merely ones with the right piece counts -- and
+    /// orientation is a quotient the algorithms act on cleanly, so many
+    /// distinct cell states share a key and the table stays far smaller than
+    /// the number of pairs that built it.
+    ///
+    /// Searching two plies backward here is worth much more than one ply
+    /// forward: it is built once per solver rather than once per node, so the
+    /// forward search gets two extra algorithms of reach for a single hash
+    /// lookup.
+    finishers: HashMap<u128, Finish>,
     /// Misorientation profiles some algorithm produces from solved.
     ///
     /// Coarser than `finishers` -- it matches counts rather than pieces -- but
@@ -207,8 +236,13 @@ pub struct OrientationCases {
 }
 
 impl OrientationCases {
-    fn of(table: &AlgTable, preserve: [bool; 3]) -> Self {
+    fn of(table: &AlgTable, preserve: [bool; 3], params: &LastCellSearchParams) -> Self {
         let mut cases = Self::default();
+
+        // One ply, over the whole filtered table. `alg` takes solved to
+        // `scrambled`, so undoing it takes anything with `scrambled`'s
+        // orientation to oriented.
+        let mut backward: Vec<&Alg> = vec![];
         for alg in table.filter_preserving(preserve) {
             let scrambled = alg.effect.apply(CellState::SOLVED);
             let profile = scrambled.unoriented();
@@ -218,29 +252,92 @@ impl OrientationCases {
                 continue;
             }
             cases.clearable.insert(profile);
-            // `alg` takes solved to `scrambled`, so undoing it takes anything
-            // with `scrambled`'s orientation to oriented. The table is listed
-            // cheapest-first, so the first algorithm to claim a key is the one
-            // to keep.
-            cases
-                .finishers
-                .entry(scrambled.orientation_key())
-                .or_insert_with(|| alg.inverted());
+            if backward.len() < params.backward_algs {
+                backward.push(alg); // table is cheapest-first
+            }
+            let key = scrambled.orientation_key();
+            if !cases.finishers.contains_key(&key) {
+                let index = cases.push_alg(alg.inverted());
+                cases.finishers.insert(
+                    key,
+                    Finish {
+                        first: index,
+                        second: Finish::NONE,
+                        cost: alg.cost as u32,
+                    },
+                );
+            }
         }
+
+        // Two plies, over a reduced set. Applying `a` then `b` to solved lands
+        // on `s`, so undoing them in the other order -- `b` first, then `a` --
+        // orients anything that shares `s`'s orientation.
+        let inverted: Vec<u32> = backward
+            .iter()
+            .map(|alg| cases.push_alg(alg.inverted()))
+            .collect();
+        for (i, a) in backward.iter().enumerate() {
+            let after_a = a.effect.apply(CellState::SOLVED);
+            for (j, b) in backward.iter().enumerate() {
+                let cost = (a.cost + b.cost) as u32;
+                let key = b.effect.apply(after_a).orientation_key();
+                // A pair can beat a single algorithm: two four-move algorithms
+                // cost less than one eight-move one.
+                match cases.finishers.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        if cost < e.get().cost {
+                            e.insert(Finish {
+                                first: inverted[j],
+                                second: inverted[i],
+                                cost,
+                            });
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(Finish {
+                            first: inverted[j],
+                            second: inverted[i],
+                            cost,
+                        });
+                    }
+                }
+            }
+        }
+
         cases
     }
 
-    /// Returns the algorithm that orients this state outright, if we have one.
-    fn finisher(&self, state: CellState) -> Option<&Alg> {
-        self.finishers.get(&state.orientation_key())
+    fn push_alg(&mut self, alg: Alg) -> u32 {
+        self.finish_algs.push(alg);
+        (self.finish_algs.len() - 1) as u32
+    }
+
+    /// Returns what it would cost to finish from here, if we know a way.
+    ///
+    /// The hot path only ever needs the cost, so expanding into algorithms is
+    /// left to [`Self::finisher`].
+    fn finish_cost(&self, state: CellState) -> Option<usize> {
+        self.finishers
+            .get(&state.orientation_key())
+            .map(|finish| finish.cost as usize)
+    }
+
+    /// Returns the algorithms that orient this state outright, if we know any.
+    fn finisher(&self, state: CellState) -> Option<Vec<Alg>> {
+        let finish = self.finishers.get(&state.orientation_key())?;
+        let mut algs = vec![self.finish_algs[finish.first as usize]];
+        if finish.second != Finish::NONE {
+            algs.push(self.finish_algs[finish.second as usize]);
+        }
+        Some(algs)
     }
 
     /// Ranks a state by how close it is to being oriented.
     ///
-    /// The bands matter more than the numbers. An exact one-algorithm finish
-    /// beats everything; then states whose profile at least *looks* finishable;
-    /// then the rest. Within the lower bands the piece count still gives a
-    /// gradient to descend.
+    /// The bands matter more than the numbers. A known finish beats everything;
+    /// then states whose profile at least *looks* finishable; then the rest.
+    /// Within the lower bands the piece count still gives a gradient to
+    /// descend.
     ///
     /// Plain piece counting would invert the top of this. `[0, 1, 0]` has one
     /// piece wrong and looks nearly done, but no algorithm clears it, while
@@ -308,7 +405,7 @@ impl<'a> LastCellSolver<'a> {
             .par_iter()
             .map(|stage| {
                 let algs = stage_algs(stage, table, &params);
-                let cases = OrientationCases::of(table, stage.preserve);
+                let cases = OrientationCases::of(table, stage.preserve, &params);
                 (algs, cases)
             })
             .collect();
@@ -504,7 +601,7 @@ impl Node {
             // Otherwise two states both one algorithm from done look equally
             // good while one is finished by four twists and the other by
             // eight, and the search happily picks the expensive one.
-            projected_cost: cost + cases.finisher(state).map_or(0, |alg| alg.cost),
+            projected_cost: cost + cases.finish_cost(state).unwrap_or(0),
             distance: (stage.distance)(state, cases),
             bars: state.bars(),
             parent,
@@ -599,8 +696,7 @@ fn run_iterative_deepening(
         // Fan out on the first algorithm; the rest recurses serially.
         let found = cases
             .finisher(start)
-            .filter(|finisher| finisher.cost <= budget)
-            .map(|finisher| vec![*finisher])
+            .filter(|_| cases.finish_cost(start).is_some_and(|c| c <= budget))
             .or_else(|| {
                 searched
                     .par_iter()
@@ -653,10 +749,10 @@ fn finish_within_budget(
     previous_was_setup: bool,
     path: &mut Vec<Alg>,
 ) -> bool {
-    if let Some(finisher) = cases.finisher(state)
-        && finisher.cost <= budget
+    if let Some(cost) = cases.finish_cost(state)
+        && cost <= budget
     {
-        path.push(*finisher);
+        path.extend(cases.finisher(state).expect("cost implies a finish"));
         return true;
     }
     if plies_left == 0 {
@@ -701,8 +797,8 @@ fn run_beam(
     start: CellState,
     params: &LastCellSearchParams,
 ) -> (Vec<Alg>, bool) {
-    if let Some(finisher) = cases.finisher(start) {
-        return (vec![*finisher], true); // already one algorithm from done
+    if let Some(finish) = cases.finisher(start) {
+        return (finish, true); // already within reach of the backward table
     }
 
     // Trim in bulk rather than after every push; the slack keeps enough
@@ -735,6 +831,8 @@ fn run_beam(
     // Best line seen so far, kept so that running out of rounds still yields
     // progress rather than nothing.
     let mut best: Option<Node> = None;
+    // Cheapest line that actually reaches the goal, counting its finish.
+    let mut best_complete: Option<Node> = None;
 
     for _ in 0..params.max_rounds {
         // Each beam node keeps its index in `history` so its children can point
@@ -776,18 +874,37 @@ fn run_beam(
         if best.is_none_or(|b| leader.rank() < b.rank()) {
             best = Some(leader);
         }
-        // Distance 1 means an exact one-algorithm finish is on file; take it.
-        if leader.distance <= 1 {
-            let mut path = path_to(&history, algs, leader);
-            if let Some(finisher) = cases.finisher(leader.state) {
-                path.push(*finisher);
-            }
-            return (path, true);
+
+        // A node the backward table can finish gives a complete line, but not
+        // necessarily the cheapest one -- the table hands back *a* way out, not
+        // the best way out. So record it and keep going rather than returning
+        // on the first one seen.
+        if let Some(&candidate) = next
+            .iter()
+            .filter(|node| node.distance <= 1)
+            .min_by_key(|node| node.projected_cost)
+            && best_complete.is_none_or(|b: Node| candidate.projected_cost < b.projected_cost)
+        {
+            best_complete = Some(candidate);
+        }
+
+        // Extending a line only ever costs more, so once every surviving node
+        // is already at least as expensive as the best complete line, nothing
+        // left can beat it.
+        if let Some(complete) = best_complete
+            && next.iter().all(|node| node.cost >= complete.projected_cost)
+        {
+            break;
         }
 
         beam = next;
     }
 
+    if let Some(node) = best_complete {
+        let mut path = path_to(&history, algs, node);
+        path.extend(cases.finisher(node.state).unwrap_or_default());
+        return (path, true);
+    }
     match best {
         Some(node) => (path_to(&history, algs, node), false),
         None => (vec![], false),
@@ -887,7 +1004,7 @@ mod tests {
         assert!((stage.remaining)(start) > 0);
 
         let algs = stage_algs(stage, table(), &params());
-        let cases = OrientationCases::of(table(), stage.preserve);
+        let cases = OrientationCases::of(table(), stage.preserve, &params());
         let (path, reached) = run_stage(
             stage,
             &algs,
@@ -917,7 +1034,7 @@ mod tests {
     #[test]
     fn test_finishers_really_finish() {
         let table = table();
-        let cases = OrientationCases::of(table, STAGES[0].preserve);
+        let cases = OrientationCases::of(table, STAGES[0].preserve, &params());
         assert!(!cases.finishers.is_empty());
         assert_eq!(0, cases.distance(CellState::SOLVED));
 
@@ -930,11 +1047,16 @@ mod tests {
             }
             assert_eq!(1, cases.distance(scrambled), "{alg}");
 
-            let finisher = cases.finisher(scrambled).expect("no finisher recorded");
+            let finish = cases.finisher(scrambled).expect("no finisher recorded");
+            let finished = finish.iter().fold(scrambled, |s, a| a.effect.apply(s));
             assert_eq!(
                 [0, 0, 0],
-                finisher.effect.apply(scrambled).unoriented(),
-                "finisher {finisher} did not orient what {alg} scrambled",
+                finished.unoriented(),
+                "the recorded finish did not orient what {alg} scrambled",
+            );
+            assert_eq!(
+                cases.finish_cost(scrambled),
+                Some(finish.iter().map(|a| a.cost).sum::<usize>()),
             );
         }
     }
@@ -944,7 +1066,7 @@ mod tests {
     #[test]
     fn test_ranking_prefers_finishable_states() {
         let table = table();
-        let cases = OrientationCases::of(table, STAGES[0].preserve);
+        let cases = OrientationCases::of(table, STAGES[0].preserve, &params());
 
         let one_away = table
             .algs()

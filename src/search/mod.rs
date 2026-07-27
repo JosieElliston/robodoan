@@ -19,9 +19,11 @@ use crate::{MAX_SOLUTION_COUNT, Profile};
 
 /// How many of the best F2L solutions to try continuing into the last cell.
 ///
-/// F2L solutions of the same length can leave wildly different last cells, and
-/// the search is cheap next to blockbuilding, so it pays to try several.
-const LAST_CELL_CANDIDATES: usize = 16;
+/// They are the top of the heuristic ranking -- shortest first, then fewest
+/// misoriented last-cell pieces. Solutions of the same length can leave wildly
+/// different last cells, and the last-cell search is cheap next to
+/// blockbuilding, so it pays to try a good number of them.
+const LAST_CELL_CANDIDATES: usize = 32;
 
 pub struct Solver {
     profile: Profile,
@@ -169,15 +171,25 @@ impl Solver {
             })
             .collect::<Vec<_>>();
 
-        let (cost, twists, last_cell) = candidates
+        let ranked = candidates
             .into_iter()
-            .min_by_key(|(cost, _, last_cell)| {
+            .sorted_by_key(|(cost, _, last_cell)| {
                 (last_cell.residual.unoriented().iter().sum::<usize>(), *cost)
             })
-            .expect("no F2L solutions");
+            .collect_vec();
+        let totals = ranked
+            .iter()
+            .map(|(cost, _, _)| *cost)
+            .sorted()
+            .collect_vec();
+        let (cost, twists, last_cell) = ranked.into_iter().next().expect("no F2L solutions");
 
         println!(
-            "Last cell: {} algorithms, {} ETM ({cost} ETM total), {} misoriented left ({:?})",
+            "Last cell: {} candidates, totals {}..{} (median {}); took {} algorithms,              {} ETM ({cost} ETM total), {} misoriented left ({:?})",
+            totals.len(),
+            totals.first().unwrap_or(&0),
+            totals.last().unwrap_or(&0),
+            totals[totals.len() / 2],
             last_cell.steps.len(),
             last_cell.cost,
             last_cell.residual.unoriented().iter().sum::<usize>(),
