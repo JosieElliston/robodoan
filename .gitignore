@@ -3,3 +3,4 @@
 *.log
 flamegraph.svg
 out.txt
+profile.json.gz

@@ -38,3 +38,14 @@ rand_pcg = "0.9.0"
 [[bench]]
 name = "benchmark"
 harness = false
+
+[features]
+# used for eg not inlining functions so they show up when profiling.
+# #[cfg_attr(feature = "profiling", inline(never))]
+profiling = []
+
+[profile.profiling]
+# cargo build --profile profiling --features profiling && samply record target/profiling/robodoan
+inherits = "release"
+debug = true
+split-debuginfo = "packed"
