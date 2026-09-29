@@ -43,6 +43,7 @@ harness = false
 # used for eg not inlining functions so they show up when profiling.
 # #[cfg_attr(feature = "profiling", inline(never))]
 profiling = []
+# cargo run -r --features dbg_rank_counts
 dbg_rank_counts = []
 
 [profile.profiling]

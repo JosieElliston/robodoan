@@ -117,11 +117,16 @@ fn print_rank_counts() {
     for r in 0..5 {
         let sum: u64 = counts.iter().map(|&(k, n)| k[r] as u64 * n).sum();
         let max = counts.iter().map(|&(k, _)| k[r]).max().unwrap_or(0);
-        println!("{r:>4} {:>6.2} {max:>6}", sum as f64 / total.max(1) as f64);
+        println!(
+            "{r:>4} {:>6.2} {}",
+            sum as f64 / total.max(1) as f64,
+            heat(max as u32, 6, 6),
+        );
     }
 
     // Histogram of total block count.
-    println!("\nblocks      count       %");
+    println!("\nblocks      count       %    cum%");
+    let mut cum = 0;
     for (len, group) in &counts
         .iter()
         .map(|&(k, n)| (profile_len(k), n))
@@ -129,10 +134,12 @@ fn print_rank_counts() {
         .chunk_by(|&(len, _)| len)
     {
         let n: u64 = group.map(|(_, n)| n).sum();
+        cum += n;
         println!(
-            "{} {n:>10} {:>6.2}%",
+            "{} {n:>10} {:>6.2}% {:>6.2}%",
             heat(len, 16, 6),
             100.0 * n as f64 / total as f64,
+            100.0 * cum as f64 / total as f64,
         );
     }
 

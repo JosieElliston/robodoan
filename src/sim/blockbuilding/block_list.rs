@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::Index;
 
 #[cfg(feature = "dbg_rank_counts")]
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 #[cfg(feature = "dbg_rank_counts")]
 use std::sync::{Arc, Mutex};
 
