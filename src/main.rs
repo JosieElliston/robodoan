@@ -35,6 +35,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("{move_count} ETM in {time:?}");
     }
 
+    #[cfg(feature = "dbg_rank_counts")]
+    print_rank_counts();
+
     return Ok(());
 
     println!();
@@ -94,6 +97,78 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("SUCCESS! They all matched!");
 
     Ok(())
+}
+
+#[cfg(feature = "dbg_rank_counts")]
+fn print_rank_counts() {
+    let mut counts = sim::blockbuilding::rank_counts().into_iter().collect_vec();
+    counts.sort_by_key(|&(k, n)| (std::cmp::Reverse(n), k));
+    let total: u64 = counts.iter().map(|&(_, n)| n).sum();
+
+    println!("\n\n---- INNER RANK POPCOUNTS ----\n");
+    println!(
+        "{} merge_blocks() calls, {} distinct profiles",
+        total,
+        counts.len()
+    );
+
+    // Per-rank marginals: mean and max popcount for each inner rank.
+    println!("\nrank   mean    max");
+    for r in 0..5 {
+        let sum: u64 = counts.iter().map(|&(k, n)| k[r] as u64 * n).sum();
+        let max = counts.iter().map(|&(k, _)| k[r]).max().unwrap_or(0);
+        println!("{r:>4} {:>6.2} {max:>6}", sum as f64 / total.max(1) as f64);
+    }
+
+    // Histogram of total block count.
+    println!("\nblocks      count       %");
+    for (len, group) in &counts
+        .iter()
+        .map(|&(k, n)| (profile_len(k), n))
+        .sorted()
+        .chunk_by(|&(len, _)| len)
+    {
+        let n: u64 = group.map(|(_, n)| n).sum();
+        println!(
+            "{} {n:>10} {:>6.2}%",
+            heat(len, 16, 6),
+            100.0 * n as f64 / total as f64,
+        );
+    }
+
+    // Most common profiles.
+    println!("\n r0 r1 r2 r3 r4  blocks        count       %    cum%");
+    let mut cum = 0;
+    for &(k, n) in counts.iter().take(30) {
+        cum += n;
+        let cells = k.iter().map(|&x| heat(x as u32, 6, 3)).join("");
+        println!(
+            "{cells}  {} {n:>12} {:>6.2}% {:>6.2}%",
+            heat(profile_len(k), 16, 6),
+            100.0 * n as f64 / total as f64,
+            100.0 * cum as f64 / total as f64,
+        );
+    }
+
+    /// Total number of blocks in an inner rank profile.
+    fn profile_len(k: [u8; 5]) -> u32 {
+        k.iter().map(|&x| x as u32).sum()
+    }
+
+    /// Right-aligns `value` to `width` and colors it on a cold-to-hot scale, where
+    /// `max` gets the hottest color. Padding is applied before the escape codes so
+    /// columns stay aligned.
+    fn heat(value: u32, max: u32, width: usize) -> String {
+        // 256-color palette: gray, blue, cyan, green, yellow, orange, red, magenta
+        const PALETTE: [u8; 8] = [240, 33, 44, 40, 226, 208, 196, 201];
+        let i = if value == 0 {
+            0
+        } else {
+            1 + ((value - 1) * (PALETTE.len() as u32 - 1) / max.max(1))
+                .min(PALETTE.len() as u32 - 2)
+        };
+        format!("\x1b[38;5;{}m{value:>width$}\x1b[0m", PALETTE[i as usize])
+    }
 }
 
 /// Sets the thread count for the global thread pool.

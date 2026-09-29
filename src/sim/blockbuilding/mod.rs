@@ -6,4 +6,6 @@ mod block_list_meta;
 
 pub use block::Block;
 pub use block_list::BlockList;
+#[cfg(feature = "dbg_rank_counts")]
+pub use block_list::rank_counts;
 use block_list_meta::BlockListMeta;

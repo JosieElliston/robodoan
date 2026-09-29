@@ -2,6 +2,11 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Index;
 
+#[cfg(feature = "dbg_rank_counts")]
+use std::collections::{BTreeSet, HashMap};
+#[cfg(feature = "dbg_rank_counts")]
+use std::sync::{Arc, Mutex};
+
 use super::{Block, BlockListMeta};
 use crate::sim::common::*;
 use crate::util::bitset::BitSet32;
@@ -275,6 +280,9 @@ impl BlockList {
     ///
     /// Returns whether any blocks were merged.
     fn merge_blocks(&mut self) -> bool {
+        #[cfg(feature = "dbg_rank_counts")]
+        record_rank_counts(&self.inner_ranks);
+
         let mut any_merged = false;
 
         // It's important to iterate from largest to smallest rank, so that we
@@ -321,6 +329,37 @@ impl FromIterator<Block> for BlockList {
         ret.cleanup();
         ret
     }
+}
+
+/// counters of each `inner_ranks` popcount profile
+#[cfg(feature = "dbg_rank_counts")]
+type RankCountShard = Arc<Mutex<HashMap<[u8; 5], u64>>>;
+#[cfg(feature = "dbg_rank_counts")]
+static RANK_COUNTS: Mutex<Vec<RankCountShard>> = Mutex::new(vec![]);
+#[cfg(feature = "dbg_rank_counts")]
+thread_local! {
+    static RANK_COUNT_SHARD: RankCountShard = {
+        let shard = RankCountShard::default();
+        RANK_COUNTS.lock().unwrap().push(Arc::clone(&shard));
+        shard
+    };
+}
+
+#[cfg(feature = "dbg_rank_counts")]
+fn record_rank_counts(inner_ranks: &[BitSet32; 5]) {
+    let key = inner_ranks.map(|r| r.count_ones() as u8);
+    RANK_COUNT_SHARD.with(|shard| *shard.lock().unwrap().entry(key).or_default() += 1);
+}
+
+#[cfg(feature = "dbg_rank_counts")]
+pub fn rank_counts() -> HashMap<[u8; 5], u64> {
+    let mut ret = HashMap::new();
+    for shard in RANK_COUNTS.lock().unwrap().iter() {
+        for (&k, &n) in shard.lock().unwrap().iter() {
+            *ret.entry(k).or_default() += n;
+        }
+    }
+    ret
 }
 
 #[cfg(test)]

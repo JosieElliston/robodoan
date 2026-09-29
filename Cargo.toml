@@ -43,6 +43,7 @@ harness = false
 # used for eg not inlining functions so they show up when profiling.
 # #[cfg_attr(feature = "profiling", inline(never))]
 profiling = []
+dbg_rank_counts = []
 
 [profile.profiling]
 # cargo build --profile profiling --features profiling && samply record target/profiling/robodoan
