@@ -21,8 +21,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut results = vec![];
+    let cpu_start = process_cpu_time();
     let mut rng = rand::rngs::SmallRng::seed_from_u64(123);
-    for i in 0..10 {
+    for i in 0..1 {
         let scramble = sim::random_twists(&mut rng, 100);
         println!("\n\n---- STARTING SEARCH #{} ----\n", i + 1);
         println!("Scramble: {}", scramble.iter().join(" "));
@@ -35,6 +36,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("{move_count} ETM in {time:?}");
     }
 
+    let cpu_time = process_cpu_time() - cpu_start;
+    println!("\ncpu time: {cpu_time:?}");
+
     #[cfg(feature = "dbg_twist_count")]
     {
         let total_time: std::time::Duration = results.iter().map(|&(_, time)| time).sum();
@@ -43,6 +47,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!(
             "{:.1} ns/twist",
             total_time.as_nanos() as f64 / twist_count as f64,
+        );
+        println!(
+            "{:.1} cpu ns/twist",
+            cpu_time.as_nanos() as f64 / twist_count as f64,
         );
     }
 
@@ -187,6 +195,17 @@ fn print_rank_counts() {
         };
         format!("\x1b[38;5;{}m{value:>width$}\x1b[0m", PALETTE[i as usize])
     }
+}
+
+fn process_cpu_time() -> std::time::Duration {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid, writable timespec.
+    let ret = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts) };
+    assert_eq!(ret, 0, "clock_gettime failed");
+    std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
 /// Sets the thread count for the global thread pool.
