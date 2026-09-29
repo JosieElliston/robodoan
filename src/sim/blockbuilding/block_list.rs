@@ -6,7 +6,7 @@ use super::{Block, BlockListMeta};
 use crate::sim::common::*;
 use crate::util::bitset::BitSet32;
 
-/// Maxmimum number of blocks that can be stored.
+/// Maximum number of blocks that can be stored.
 const MAX_BLOCK_COUNT: u32 = 26;
 
 /// Partial puzzle state, stored as a list of blocks.
@@ -55,7 +55,7 @@ impl Index<u8> for BlockList {
 }
 
 impl BlockList {
-    /// Maxmimum number of blocks that can be stored
+    /// Maximum number of blocks that can be stored
     pub const MAX_LEN: u32 = MAX_BLOCK_COUNT;
 
     /// Empty block list
