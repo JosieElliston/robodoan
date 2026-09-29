@@ -31,8 +31,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         results.push((solution.len(), t.elapsed()));
     }
     println!("\n\n---- RESULTS ----\n");
-    for (move_count, time) in results {
+    for (move_count, time) in &results {
         println!("{move_count} ETM in {time:?}");
+    }
+
+    #[cfg(feature = "dbg_twist_count")]
+    {
+        let total_time: std::time::Duration = results.iter().map(|&(_, time)| time).sum();
+        let twist_count = sim::blockbuilding::twist_count();
+        println!("\n{twist_count} twists in {total_time:?}",);
+        println!(
+            "{:.1} ns/twist",
+            total_time.as_nanos() as f64 / twist_count as f64,
+        );
     }
 
     #[cfg(feature = "dbg_rank_counts")]

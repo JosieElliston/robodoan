@@ -4,7 +4,9 @@ use std::ops::Index;
 
 #[cfg(feature = "dbg_rank_counts")]
 use std::collections::HashMap;
-#[cfg(feature = "dbg_rank_counts")]
+#[cfg(feature = "dbg_twist_count")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(feature = "dbg_rank_counts", feature = "dbg_twist_count"))]
 use std::sync::{Arc, Mutex};
 
 use super::{Block, BlockListMeta};
@@ -207,6 +209,9 @@ impl BlockList {
     pub fn twist(&self, twist: Twist) -> BlockList {
         debug_assert_ne!(twist.transform, Elem::IDENT);
 
+        #[cfg(feature = "dbg_twist_count")]
+        record_twist();
+
         let mut ret = self.clone();
 
         ret.meta.count_twist_on_grip(twist.grip);
@@ -329,6 +334,34 @@ impl FromIterator<Block> for BlockList {
         ret.cleanup();
         ret
     }
+}
+
+#[cfg(feature = "dbg_twist_count")]
+static TWIST_COUNTS: Mutex<Vec<Arc<AtomicU64>>> = Mutex::new(vec![]);
+#[cfg(feature = "dbg_twist_count")]
+thread_local! {
+    static TWIST_COUNT_SHARD: Arc<AtomicU64> = {
+        let shard = Arc::<AtomicU64>::default();
+        TWIST_COUNTS.lock().unwrap().push(Arc::clone(&shard));
+        shard
+    };
+}
+
+#[cfg(feature = "dbg_twist_count")]
+fn record_twist() {
+    // only this thread writes its shard, so no need for an atomic RMW
+    TWIST_COUNT_SHARD
+        .with(|shard| shard.store(shard.load(Ordering::Relaxed) + 1, Ordering::Relaxed));
+}
+
+#[cfg(feature = "dbg_twist_count")]
+pub fn twist_count() -> u64 {
+    TWIST_COUNTS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|shard| shard.load(Ordering::Relaxed))
+        .sum()
 }
 
 /// counters of each `inner_ranks` popcount profile
