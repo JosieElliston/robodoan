@@ -271,6 +271,7 @@ impl Block {
             return Block::EMPTY; // differ along multiple axes
         }
         if diff & (0x010 << merge_axis) == 0 {
+            // this never happens in practice
             return Block::EMPTY; // disconnected blocks not allowed
         }
 
@@ -304,6 +305,15 @@ impl Block {
 
         Self::from_layer_bits_nonempty(body.layer_bits() | head.layer_bits())
             .with_attitude(head.attitude())
+    }
+
+    pub fn dbg_can_merge_layers(body: Self, head: Self) -> bool {
+        let diff = body.layer_bits() ^ head.layer_bits();
+        let merge_axis = diff.trailing_zeros() as u8 % 4;
+        if diff & !(0x111 << merge_axis) != 0 {
+            return false; // differ along multiple axes
+        }
+        true
     }
 
     /// Returns the number of moves needed to pair `body` and `head`, or `None`

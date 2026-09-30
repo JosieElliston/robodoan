@@ -261,8 +261,7 @@ impl BlockList {
     }
 
     fn cleanup_inner(&mut self) {
-        // Merge blocks until we reach a fixed point
-        while self.merge_blocks() {}
+        self.merge_blocks_until();
 
         // Filter out empty blocks
         let mut len = self.len() as usize;
@@ -286,13 +285,121 @@ impl BlockList {
         }
     }
 
+    /// Merge blocks until we reach a fixed point.
+    fn merge_blocks_until(&mut self) {
+        if self.len() > 16 {
+            // this never happens in practice
+            while self.merge_blocks_once_fallback() {}
+            return;
+        }
+
+        // `not_mergeable[h].get(b)` implies
+        // `self[h]` cannot be merged with `self[b]`.
+        let mut not_mergeable = [BitSet16::EMPTY; 16];
+
+        while self.merge_blocks_once(&mut not_mergeable) {}
+    }
+
     /// Merges all blocks that can be merged.
     ///
     /// Returns whether any blocks were merged.
-    fn merge_blocks(&mut self) -> bool {
+    fn merge_blocks_once(&mut self, not_mergeable: &mut [BitSet16; 16]) -> bool {
         #[cfg(feature = "dbg_rank_counts")]
         record_rank_counts(&self.inner_ranks);
 
+        let mut any_merged = false;
+
+        // It's important to iterate from largest to smallest rank, so that we
+        // prioritize blocks where attitudes must match exactly (like
+        // corner+edge) instead of blocks where many attitudes are
+        // indistinguishable (like center+core).
+        for body_rank in (0..4usize).rev() {
+            let head_rank = body_rank + 1;
+            let body_candidates = self.inner_ranks[body_rank as usize].clone();
+            for body_index in body_candidates {
+                // TODO: bc we sorted them,
+                // i think we have that the bodies of given rank are contiguous
+                // actually no, we sorted them lexicographically, not by rank
+                // check if rank then lexicographical tiebreaks so they're contiguous is faster
+                let body = self[body_index];
+
+                let head_candidates = self.inner_ranks[head_rank as usize].clone();
+                'loop_per_head: for head_index in head_candidates {
+                    debug_assert!(!not_mergeable[body_index as usize].get(head_index));
+
+                    {
+                        let head = self[head_index];
+                        let merged = Block::merge(body, head);
+                        if merged.is_empty() {
+                            dbg_count!("oracle not_mergeable");
+                        } else {
+                            dbg_count!("oracle mergeable");
+                        }
+                    }
+
+                    {
+                        let head = self[head_index];
+                        if !Block::dbg_can_merge_layers(body, head) {
+                            dbg_count!("layers not_mergeable");
+                        } else {
+                            dbg_count!("layers mergeable");
+                        }
+                    }
+
+                    if not_mergeable[head_index as usize].get(body_index) {
+                        dbg_count!("cache not_mergeable");
+                        #[cfg(debug_assertions)]
+                        {
+                            let head = self[head_index];
+                            let merged = Block::merge(body, head);
+                            debug_assert!(
+                                merged.is_empty(),
+                                "body_index: {body_index}, head_index: {head_index}"
+                            );
+                        }
+                        continue;
+                    } else {
+                        dbg_count!("cache mergeable");
+                    }
+
+                    let head = self[head_index];
+
+                    let merged = Block::merge(body, head);
+
+                    if merged.is_empty() {
+                        not_mergeable[head_index as usize].set_from_0(body_index);
+                    } else {
+                        any_merged = true;
+                        // Remove head
+                        self.remove_block(head_index as u32);
+                        // Replace body (inner rank stays the same)
+                        self.set_block_with_same_rank(body_index as u32, merged);
+
+                        // the head no longer exists for sibling bodies to try to merge with.
+                        not_mergeable[head_index as usize] = BitSet16::EMPTY;
+
+                        // the blocks of rank `body_rank - 1`
+                        // may want to merge with the new body.
+                        not_mergeable[body_index as usize] = BitSet16::EMPTY;
+
+                        // heads that the old body failed against may now succeed.
+                        for head_index in head_candidates {
+                            not_mergeable[head_index as usize].clear(body_index);
+                        }
+
+                        break 'loop_per_head;
+                    }
+                }
+            }
+        }
+
+        any_merged
+    }
+
+    /// Merges all blocks that can be merged.
+    ///
+    /// Returns whether any blocks were merged.
+    fn merge_blocks_once_fallback(&mut self) -> bool {
         let mut any_merged = false;
 
         // It's important to iterate from largest to smallest rank, so that we
@@ -303,10 +410,6 @@ impl BlockList {
             let head_rank = body_rank + 1;
             let body_candidates = self.inner_ranks[body_rank as usize].clone();
             for body_index in body_candidates {
-                // TODO: bc we sorted them,
-                // i think we have that the bodies of given rank are contiguous
-                // actually no, we sorted them lexicographically, not by rank
-                // check if rank then lexicographical tiebreaks so they're contiguous is faster
                 let body = self[body_index];
 
                 let head_candidates = self.inner_ranks[head_rank as usize].clone();
