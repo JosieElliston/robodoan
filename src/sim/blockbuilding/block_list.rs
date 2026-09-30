@@ -16,12 +16,14 @@ use crate::util::bitset::BitSet32;
 /// Maximum number of blocks that can be stored.
 const MAX_BLOCK_COUNT: u32 = 26;
 
+// TODO: make this not copy
 /// Partial puzzle state, stored as a list of blocks.
 #[derive(Default, Copy, Clone, PartialEq, Eq, Hash, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct BlockList {
     /// List of blocks.
     blocks: [Block; MAX_BLOCK_COUNT as usize],
+    // TODO: should sort by rank and use CSR?
     /// Bitmap indicating, for each possible inner rank value, the indices of
     /// blocks with that inner rank.
     inner_ranks: [BitSet32; 5],
@@ -227,6 +229,8 @@ impl BlockList {
                 if inactive.is_empty() {
                     ret.set_block_with_same_rank(i, active); // all active
                 } else {
+                    // TODO: use this fact to not compute inactive.inner_rank when pushing
+                    debug_assert_eq!(active.inner_rank(), inactive.inner_rank() + 1);
                     ret.set_block_with_same_rank(i, inactive); // inactive has same inner rank
                     if ret.push(active).is_err() {
                         return Self::EMPTY; // indicate error
@@ -298,6 +302,10 @@ impl BlockList {
             let head_rank = body_rank + 1;
             let body_candidates = self.inner_ranks[body_rank as usize].clone();
             for body_index in body_candidates {
+                // TODO: bc we sorted them,
+                // i think we have that the bodies of given rank are contiguous
+                // actually no, we sorted them lexicographically, not by rank
+                // check if rank then lexicographical tiebreaks so they're contiguous is faster
                 let body = self[body_index];
 
                 let head_candidates = self.inner_ranks[head_rank as usize].clone();

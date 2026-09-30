@@ -124,12 +124,9 @@ fn print_rank_counts() {
     counts.sort_by_key(|&(k, n)| (std::cmp::Reverse(n), k));
     let total: u64 = counts.iter().map(|&(_, n)| n).sum();
 
-    println!("\n\n---- INNER RANK POPCOUNTS ----\n");
-    println!(
-        "{} merge_blocks() calls, {} distinct profiles",
-        total,
-        counts.len()
-    );
+    println!("\n\n---- RANK COUNTS ----\n");
+    println!("{} merge_blocks() calls", total,);
+    println!("{} distinct profiles", counts.len());
 
     // Per-rank marginals: mean and max popcount for each inner rank.
     println!("\nrank   mean    max");
@@ -165,7 +162,7 @@ fn print_rank_counts() {
     // Most common profiles.
     println!("\n r0 r1 r2 r3 r4  blocks        count       %    cum%");
     let mut cum = 0;
-    for &(k, n) in counts.iter().take(30) {
+    for &(k, n) in counts.iter().take(32) {
         cum += n;
         let cells = k.iter().map(|&x| heat(x as u32, 6, 3)).join("");
         println!(
