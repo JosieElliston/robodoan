@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use super::{Block, BlockListMeta};
 use crate::sim::common::*;
-use crate::util::bitset::{BitSet16, BitSet32};
+use crate::util::bitset::BitSet32;
 
 /// Maximum number of blocks that can be stored.
 const MAX_BLOCK_COUNT: u32 = 26;
@@ -209,8 +209,10 @@ impl BlockList {
     /// Also gives the applied twist for convenience.
     ///
     /// An element is [`BlockList::EMPTY`] if there are too many blocks for that element.
-    pub fn grip_twists(&self, grip: Grip) -> [(Twist, BlockList); 23] {
-        grip.twists().map(|twist| (twist, self.twist(twist)))
+    pub fn grip_twists(&self, grip: Grip) -> impl Iterator<Item = (Twist, BlockList)> {
+        grip.twists()
+            .into_iter()
+            .map(|twist| (twist, self.twist(twist)))
     }
 
     /// Applies a twist.

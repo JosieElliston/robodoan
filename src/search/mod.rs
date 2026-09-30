@@ -11,9 +11,7 @@ pub use heuristic::Heuristic;
 use itertools::Itertools;
 pub use meta::{Continuation, SolutionMetadata};
 pub use params::{BlockBuildingSearchParams, Targets};
-use rayon::iter::{
-    IntoParallelIterator, IntoParallelRefIterator, ParallelExtend, ParallelIterator,
-};
+use rayon::prelude::*;
 pub use segment::{Segment, SegmentId, SegmentStore};
 
 pub struct Solver {
@@ -355,7 +353,8 @@ pub fn dfs_blockbuild(
 
     if remaining_parallel_depth > 0 {
         let grips = Grip::ALL.into_par_iter().filter(grip_is_worth_testing);
-        let new_partial_solutions = grips.flat_map(|grip| solution_so_far.push_grip_twist(grip));
+        let new_partial_solutions =
+            grips.flat_map(|grip| solution_so_far.push_grip_twist(grip).par_bridge());
         solutions_buffer.par_extend(new_partial_solutions.flat_map_iter(|new_partial_solution| {
             let mut solutions_buffer = vec![];
             explore(new_partial_solution, &mut solutions_buffer);
