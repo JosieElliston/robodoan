@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("\ncpu time: {cpu_time:?}");
 
     {
-        let counts = sim::blockbuilding::dbg_counts();
+        let counts = robodoan::util::dbg_count::dbg_counts();
         println!();
         for (k, v) in counts {
             println!("{k}: {v}");

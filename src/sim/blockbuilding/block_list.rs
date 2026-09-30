@@ -2,11 +2,13 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Index;
 
+#[cfg(feature = "dbg_rank_counts")]
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "dbg_twist_count")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(feature = "dbg_rank_counts", feature = "dbg_twist_count"))]
+use std::sync::{Arc, Mutex};
 
 use super::{Block, BlockListMeta};
 use crate::sim::common::*;
@@ -341,31 +343,6 @@ impl FromIterator<Block> for BlockList {
         ret.cleanup();
         ret
     }
-}
-
-type DbgCountShard = Arc<Mutex<HashMap<String, u64>>>;
-static DBG_COUNTS: Mutex<Vec<DbgCountShard>> = Mutex::new(vec![]);
-thread_local! {
-    static DBG_COUNTS_SHARD: DbgCountShard = {
-       let shard = DbgCountShard::default();
-        DBG_COUNTS.lock().unwrap().push(Arc::clone(&shard));
-        shard
-    };
-}
-
-fn record_dbg_count(name: impl Into<String>) {
-    let name = name.into();
-    DBG_COUNTS_SHARD.with(|shard| *shard.lock().unwrap().entry(name).or_default() += 1);
-}
-
-pub fn dbg_counts() -> HashMap<String, u64> {
-    let mut ret = HashMap::new();
-    for shard in DBG_COUNTS.lock().unwrap().iter() {
-        for (k, n) in shard.lock().unwrap().iter() {
-            *ret.entry(k.clone()).or_default() += n;
-        }
-    }
-    ret
 }
 
 #[cfg(feature = "dbg_twist_count")]

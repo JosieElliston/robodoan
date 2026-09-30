@@ -28,3 +28,11 @@ macro_rules! overprintln {
         println!($($args)*);
     };
 }
+
+macro_rules! dbg_count {
+    ($name:literal) => {{
+        #[::linkme::distributed_slice($crate::util::dbg_count::DBG_COUNT_NAMES)]
+        static NAME: &'static str = $name;
+        $crate::util::dbg_count::record(&NAME);
+    }};
+}

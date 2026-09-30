@@ -1,6 +1,7 @@
 //! Utilities
 
 pub mod bitset;
+pub mod dbg_count;
 pub mod stackvec;
 
 /// Extends `v` with default values until it contains `index`.

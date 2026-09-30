@@ -24,6 +24,7 @@ bytemuck = "1.24.0"
 cgmath = "0.18.0"
 itertools = "0.14.0"
 libc = { version = "0.2.189" }
+linkme = "0.3.37"
 pollster = "0.4.0"
 pretty_assertions = "1.4.1"
 proptest = "1.9.0"
