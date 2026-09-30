@@ -39,6 +39,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cpu_time = process_cpu_time() - cpu_start;
     println!("\ncpu time: {cpu_time:?}");
 
+    {
+        let counts = sim::blockbuilding::dbg_counts();
+        println!();
+        for (k, v) in counts {
+            println!("{k}: {v}");
+        }
+    }
+
     #[cfg(feature = "dbg_twist_count")]
     {
         let total_time: std::time::Duration = results.iter().map(|&(_, time)| time).sum();

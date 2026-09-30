@@ -10,4 +10,5 @@ pub use block_list::BlockList;
 pub use block_list::rank_counts;
 #[cfg(feature = "dbg_twist_count")]
 pub use block_list::twist_count;
+pub use block_list::{BlockList, dbg_counts};
 use block_list_meta::BlockListMeta;
