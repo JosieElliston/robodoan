@@ -44,13 +44,13 @@ harness = false
 # used for eg not inlining functions so they show up when profiling.
 # #[cfg_attr(feature = "profiling", inline(never))]
 profiling = []
-# cargo run -r --features dbg_twist_count
+# cargo run -r -F dbg_twist_count
 dbg_twist_count = []
-# cargo run -r --features dbg_rank_counts
+# cargo run -r -F dbg_rank_counts
 dbg_rank_counts = []
 
 [profile.profiling]
-# cargo build --profile profiling --features profiling && samply record target/profiling/robodoan
+# cargo build --profile profiling -F profiling && samply record target/profiling/robodoan
 inherits = "release"
 debug = true
 split-debuginfo = "packed"
