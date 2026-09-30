@@ -205,6 +205,14 @@ impl BlockList {
         ret
     }
 
+    /// Applies all `grip.twists()`.
+    /// Also gives the applied twist for convenience.
+    ///
+    /// An element is [`BlockList::EMPTY`] if there are too many blocks for that element.
+    pub fn grip_twists(&self, grip: Grip) -> [(Twist, BlockList); 23] {
+        grip.twists().map(|twist| (twist, self.twist(twist)))
+    }
+
     /// Applies a twist.
     ///
     /// Returns [`BlockList::EMPTY`] if there are too many blocks.

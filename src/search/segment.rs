@@ -54,6 +54,20 @@ impl Ord for Segment {
 }
 
 impl Segment {
+    /// Adds all `grip.twists()` to the segment.
+    #[must_use]
+    pub fn push_grip_twist(&self, grip: Grip) -> [Option<Self>; 23] {
+        self.state.grip_twists(grip).map(|(twist, state)| {
+            crate::gpu_test::add_example(&self.state, twist);
+            Some(Self {
+                state: state.if_nonempty()?,
+                segment_twists: self.segment_twists.push(twist)?,
+                previous_segment: self.previous_segment,
+                meta: self.meta,
+            })
+        })
+    }
+
     /// Adds a twist to the segment.
     #[must_use]
     pub fn push_twist(&self, twist: Twist) -> Option<Self> {

@@ -339,8 +339,8 @@ pub fn dfs_blockbuild(
         true
     };
 
-    let explore_twist = |twist, solutions_buffer: &mut Vec<Segment>| {
-        if let Some(new_partial_solution) = solution_so_far.push_twist(twist) {
+    let explore = |new_partial_solution: Option<Segment>, solutions_buffer: &mut Vec<Segment>| {
+        if let Some(new_partial_solution) = new_partial_solution {
             dfs_blockbuild(
                 params,
                 expected_blocks,
@@ -355,15 +355,16 @@ pub fn dfs_blockbuild(
 
     if remaining_parallel_depth > 0 {
         let grips = Grip::ALL.into_par_iter().filter(grip_is_worth_testing);
-        let twists = grips.flat_map(|grip| grip.twists());
-        solutions_buffer.par_extend(twists.flat_map_iter(|twist| {
+        let new_partial_solutions = grips.flat_map(|grip| solution_so_far.push_grip_twist(grip));
+        solutions_buffer.par_extend(new_partial_solutions.flat_map_iter(|new_partial_solution| {
             let mut solutions_buffer = vec![];
-            explore_twist(twist, &mut solutions_buffer);
+            explore(new_partial_solution, &mut solutions_buffer);
             solutions_buffer
         }));
     } else {
         let grips = Grip::ALL.into_iter().filter(grip_is_worth_testing);
-        let twists = grips.flat_map(|grip| grip.twists());
-        twists.for_each(|twist| explore_twist(twist, solutions_buffer));
+        let new_partial_solutions = grips.flat_map(|grip| solution_so_far.push_grip_twist(grip));
+        new_partial_solutions
+            .for_each(|new_partial_solution| explore(new_partial_solution, solutions_buffer));
     }
 }
