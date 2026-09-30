@@ -293,17 +293,13 @@ impl BlockList {
             return;
         }
 
-        // `not_mergeable[h].get(b)` implies
-        // `self[h]` cannot be merged with `self[b]`.
-        let mut not_mergeable = [BitSet16::EMPTY; 16];
-
-        while self.merge_blocks_once(&mut not_mergeable) {}
+        while self.merge_blocks_once() {}
     }
 
     /// Merges all blocks that can be merged.
     ///
     /// Returns whether any blocks were merged.
-    fn merge_blocks_once(&mut self, not_mergeable: &mut [BitSet16; 16]) -> bool {
+    fn merge_blocks_once(&mut self) -> bool {
         #[cfg(feature = "dbg_rank_counts")]
         record_rank_counts(&self.inner_ranks);
 
@@ -325,8 +321,7 @@ impl BlockList {
 
                 let head_candidates = self.inner_ranks[head_rank as usize].clone();
                 'loop_per_head: for head_index in head_candidates {
-                    debug_assert!(!not_mergeable[body_index as usize].get(head_index));
-
+                    #[cfg(false)]
                     {
                         let head = self[head_index];
                         let merged = Block::merge(body, head);
@@ -335,9 +330,7 @@ impl BlockList {
                         } else {
                             dbg_count!("oracle mergeable");
                         }
-                    }
 
-                    {
                         let head = self[head_index];
                         if !Block::dbg_can_merge_layers(body, head) {
                             dbg_count!("layers not_mergeable");
@@ -346,46 +339,16 @@ impl BlockList {
                         }
                     }
 
-                    if not_mergeable[head_index as usize].get(body_index) {
-                        dbg_count!("cache not_mergeable");
-                        #[cfg(debug_assertions)]
-                        {
-                            let head = self[head_index];
-                            let merged = Block::merge(body, head);
-                            debug_assert!(
-                                merged.is_empty(),
-                                "body_index: {body_index}, head_index: {head_index}"
-                            );
-                        }
-                        continue;
-                    } else {
-                        dbg_count!("cache mergeable");
-                    }
-
                     let head = self[head_index];
 
                     let merged = Block::merge(body, head);
 
-                    if merged.is_empty() {
-                        not_mergeable[head_index as usize].set_from_0(body_index);
-                    } else {
+                    if !merged.is_empty() {
                         any_merged = true;
                         // Remove head
                         self.remove_block(head_index as u32);
                         // Replace body (inner rank stays the same)
                         self.set_block_with_same_rank(body_index as u32, merged);
-
-                        // the head no longer exists for sibling bodies to try to merge with.
-                        not_mergeable[head_index as usize] = BitSet16::EMPTY;
-
-                        // the blocks of rank `body_rank - 1`
-                        // may want to merge with the new body.
-                        not_mergeable[body_index as usize] = BitSet16::EMPTY;
-
-                        // heads that the old body failed against may now succeed.
-                        for head_index in head_candidates {
-                            not_mergeable[head_index as usize].clear(body_index);
-                        }
 
                         break 'loop_per_head;
                     }
