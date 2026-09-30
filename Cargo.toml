@@ -42,6 +42,7 @@ name = "benchmark"
 harness = false
 
 [features]
+default = ["dbg_twist_count"]
 # used for eg not inlining functions so they show up when profiling.
 # #[cfg_attr(feature = "profiling", inline(never))]
 profiling = []
