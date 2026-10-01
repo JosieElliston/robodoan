@@ -144,13 +144,28 @@ fn print_rank_counts() {
 
     // Per-rank marginals: mean and max popcount for each inner rank.
     println!("\nrank   mean    max");
-    for r in 0..5 {
-        let sum: u64 = counts.iter().map(|&(k, n)| k[r] as u64 * n).sum();
-        let max = counts.iter().map(|&(k, _)| k[r]).max().unwrap_or(0);
+    for rank in 0..5 {
+        let sum: u64 = counts.iter().map(|&(k, n)| k[rank] as u64 * n).sum();
+        let max = counts.iter().map(|&(k, _)| k[rank]).max().unwrap_or(0);
         println!(
-            "{r:>4} {:>6.2} {}",
+            "{rank:>4} {:>6.2} {}",
             sum as f64 / total.max(1) as f64,
             heat(max as u32, 6, 6),
+        );
+    }
+
+    println!("\nmax rank      count       %    cum%");
+    let mut cum = 0;
+    for rank in 0..5 {
+        let n: u64 = counts
+            .iter()
+            .filter_map(|&(k, n)| (*k.iter().max().unwrap() == rank).then_some(n))
+            .sum();
+        cum += n;
+        println!(
+            "{rank:>8} {n:>10} {:>6.2}% {:>6.2}%",
+            100.0 * n as f64 / total as f64,
+            100.0 * cum as f64 / total as f64,
         );
     }
 
