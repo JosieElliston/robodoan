@@ -297,7 +297,7 @@ impl BlockList {
                 ret.blocks[i] = twist.transform * ret.blocks[i];
             }
             ret.cleanup();
-            
+
             (twist, ret)
         });
         Either::Right(Either::Right(twisted))
@@ -383,8 +383,8 @@ impl BlockList {
         }
         self.meta.set_block_count(len as u8);
 
-        // Canonicalize block order.
-        self.blocks[..len].sort();
+        // // Canonicalize block order.
+        // self.blocks[..len].sort();
 
         // Update inner ranks
         self.inner_ranks = Default::default();
