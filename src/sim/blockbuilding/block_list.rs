@@ -270,27 +270,8 @@ impl BlockList {
         }
 
         let mut blocks = [Block::EMPTY; MAX_BLOCK_COUNT as usize];
-        blocks[inactive_len..blocks_len].copy_from_slice(&active_blocks[..active_len]);
-        blocks[..inactive_len].copy_from_slice(&inactive_blocks[..inactive_len]);
-
-        let mut active_indexes = [u32::MAX; MAX_BLOCK_COUNT as usize];
-        for i in 0..blocks_len {
-            active_indexes[i] = i as u32;
-        }
-        active_indexes[..blocks_len].sort_by(|&i, &j| {
-            blocks[i as usize]
-                .inner_rank()
-                .cmp(&blocks[j as usize].inner_rank())
-        });
-        {
-            let mut tmp = [Block::EMPTY; MAX_BLOCK_COUNT as usize];
-            let mut tmp_len = 0;
-            for &i in &active_indexes[..blocks_len] {
-                tmp[tmp_len] = blocks[i as usize];
-                tmp_len += 1;
-            }
-            blocks = tmp;
-        }
+        blocks[..active_len].copy_from_slice(&active_blocks[..active_len]);
+        blocks[active_len..blocks_len].copy_from_slice(&inactive_blocks[..inactive_len]);
 
         let mut inner_ranks = [BitSet32::EMPTY; 5];
         for i in 0..blocks_len {
@@ -313,13 +294,8 @@ impl BlockList {
             record_twist();
 
             let mut ret = split;
-            // for i in inactive_len..blocks_len {
-            //     ret.blocks[i] = twist.transform * ret.blocks[i];
-            // }
-            for i in 0..blocks_len {
-                if (inactive_len as u32..blocks_len as u32).contains(&active_indexes[i]) {
-                    ret.blocks[i as usize] = twist.transform * ret.blocks[i as usize];
-                }
+            for i in 0..active_len {
+                ret.blocks[i] = twist.transform * ret.blocks[i];
             }
             ret.cleanup();
 
