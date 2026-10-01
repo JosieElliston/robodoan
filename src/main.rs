@@ -39,9 +39,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cpu_time = process_cpu_time() - cpu_start;
     println!("\ncpu time: {cpu_time:?}");
 
-    {
-        let counts = robodoan::util::dbg_count::dbg_counts();
-        println!();
+    'counts: {
+        let mut counts = robodoan::util::dbg_count::dbg_counts()
+            .into_iter()
+            .collect_vec();
+        if counts.is_empty() {
+            break 'counts;
+        }
+        counts.sort_unstable();
+        println!("\n ---- counts ----");
         for (k, v) in counts {
             println!("{k}: {v}");
         }

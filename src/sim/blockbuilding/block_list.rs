@@ -360,12 +360,24 @@ impl BlockList {
     fn cleanup(&mut self) {
         self.cleanup_inner();
 
+        #[cfg(false)]
         #[cfg(debug_assertions)]
         {
             // Check that `cleanup_inner()` is idempotent.
             let old = self.clone();
             self.cleanup_inner();
             assert_eq!(*self, old, "cleanup() is not idempotent");
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // Check that `cleanup_inner()` is second-order idempotent.
+            // ie that f^3 = f^2
+            let mut slf = self.clone();
+            slf.cleanup_inner();
+            let old = slf.clone();
+            slf.cleanup_inner();
+            assert_eq!(slf, old, "cleanup() is not second-order idempotent");
         }
     }
 
@@ -402,15 +414,72 @@ impl BlockList {
             return;
         }
 
-        while self.merge_blocks_once() {}
+        // let rank_popcnts = self.inner_ranks.map(|b| b.count_ones() as usize);
+        // let max_rank_popcnt = self
+        //     .inner_ranks
+        //     .map(|b| b.count_ones())
+        //     .into_iter()
+        //     .max()
+        //     .unwrap();
+        // match max_rank_popcnt {
+        //     0 => dbg_count!("0"),
+        //     1 => dbg_count!("1"),
+        //     2 => dbg_count!("2"),
+        //     3 => dbg_count!("3"),
+        //     4 => dbg_count!("4"),
+        //     5 => dbg_count!("5"),
+        //     6 => dbg_count!("6"),
+        //     7 => dbg_count!("7"),
+        //     8 => dbg_count!("8"),
+        //     _ => dbg_count!("more"),
+        // }
+        // match max_rank_popcnt {
+        //     0 => todo!(),
+        //     1 => todo!(),
+        //     2 => todo!(),
+        //     3..=4 => todo!(),
+        //     5..=8 => todo!(),
+        //     9.. => {
+        //         while self.merge_blocks_once_fallback() {}
+        //         return;
+        //     }
+        // }
+
+        const N: usize = 4;
+
+        let mut blocks = [[Block::EMPTY; N]; 5];
+        let mut lens = [0; 5];
+
+        for &block in &self.blocks[0..self.len() as usize] {
+            let rank = block.inner_rank() as usize;
+            if lens[rank] >= N {
+                // this fallback happens 1% of the time
+                while self.merge_blocks_once_fallback() {}
+                return;
+            }
+            blocks[rank][lens[rank]] = block;
+            lens[rank] += 1;
+        }
+
+        while Self::merge_blocks_once(&mut blocks, &mut lens) {}
+
+        let mut len = 0;
+        for rank in 0..5 {
+            self.blocks[len..len + lens[rank]].copy_from_slice(&blocks[rank][0..lens[rank]]);
+            len += lens[rank];
+        }
+
+        let old_len = self.len() as usize;
+        self.blocks[len..old_len].fill(Block::EMPTY);
+        self.meta.set_block_count(len as u8);
     }
 
     /// Merges all blocks that can be merged.
     ///
     /// Returns whether any blocks were merged.
-    fn merge_blocks_once(&mut self) -> bool {
+    fn merge_blocks_once(blocks: &mut [[Block; 4]; 5], lens: &mut [usize; 5]) -> bool {
         #[cfg(feature = "dbg_rank_counts")]
-        record_rank_counts(&self.inner_ranks);
+        record_rank_popcnts(&lens);
 
         let mut any_merged = false;
 
@@ -418,46 +487,29 @@ impl BlockList {
         // prioritize blocks where attitudes must match exactly (like
         // corner+edge) instead of blocks where many attitudes are
         // indistinguishable (like center+core).
+        // actually this isn't important.
         for body_rank in (0..4usize).rev() {
             let head_rank = body_rank + 1;
-            let body_candidates = self.inner_ranks[body_rank as usize].clone();
-            for body_index in body_candidates {
-                // TODO: bc we sorted them,
-                // i think we have that the bodies of given rank are contiguous
-                // actually no, we sorted them lexicographically, not by rank
-                // check if rank then lexicographical tiebreaks so they're contiguous is faster
-                let body = self[body_index];
-
-                let head_candidates = self.inner_ranks[head_rank as usize].clone();
-                'loop_per_head: for head_index in head_candidates {
-                    #[cfg(false)]
-                    {
-                        let head = self[head_index];
-                        let merged = Block::merge(body, head);
-                        if merged.is_empty() {
-                            dbg_count!("oracle not_mergeable");
-                        } else {
-                            dbg_count!("oracle mergeable");
-                        }
-
-                        let head = self[head_index];
-                        if !Block::dbg_can_merge_layers(body, head) {
-                            dbg_count!("layers not_mergeable");
-                        } else {
-                            dbg_count!("layers mergeable");
-                        }
-                    }
-
-                    let head = self[head_index];
+            for body_index in 0..lens[body_rank] {
+                let body = blocks[body_rank][body_index];
+                'loop_per_head: for head_index in 0..lens[head_rank] {
+                    let head = blocks[head_rank][head_index];
 
                     let merged = Block::merge(body, head);
 
                     if !merged.is_empty() {
                         any_merged = true;
-                        // Remove head
-                        self.remove_block(head_index as u32);
-                        // Replace body (inner rank stays the same)
-                        self.set_block_with_same_rank(body_index as u32, merged);
+
+                        // swap remove head
+                        lens[head_rank] -= 1;
+                        blocks[head_rank][head_index] = blocks[head_rank][lens[head_rank]];
+                        #[cfg(debug_assertions)]
+                        {
+                            blocks[head_rank][lens[head_rank]] = Block::EMPTY;
+                        }
+
+                        // replace body (inner rank stays the same)
+                        blocks[body_rank][body_index] = merged;
 
                         break 'loop_per_head;
                     }
@@ -486,6 +538,24 @@ impl BlockList {
 
                 let head_candidates = self.inner_ranks[head_rank as usize].clone();
                 'loop_per_head: for head_index in head_candidates {
+                    #[cfg(false)]
+                    {
+                        let head = self[head_index];
+                        let merged = Block::merge(body, head);
+                        if merged.is_empty() {
+                            dbg_count!("oracle not_mergeable");
+                        } else {
+                            dbg_count!("oracle mergeable");
+                        }
+
+                        let head = self[head_index];
+                        if !Block::dbg_can_merge_layers(body, head) {
+                            dbg_count!("layers not_mergeable");
+                        } else {
+                            dbg_count!("layers mergeable");
+                        }
+                    }
+
                     let head = self[head_index];
 
                     let merged = Block::merge(body, head);
@@ -565,6 +635,12 @@ thread_local! {
 #[cfg(feature = "dbg_rank_counts")]
 fn record_rank_counts(inner_ranks: &[BitSet32; 5]) {
     let key = inner_ranks.map(|r| r.count_ones() as u8);
+    RANK_COUNT_SHARD.with(|shard| *shard.lock().unwrap().entry(key).or_default() += 1);
+}
+
+#[cfg(feature = "dbg_rank_counts")]
+fn record_rank_popcnts(popcnts: &[usize; 5]) {
+    let key = popcnts.map(|c| c as u8);
     RANK_COUNT_SHARD.with(|shard| *shard.lock().unwrap().entry(key).or_default() += 1);
 }
 
