@@ -27,6 +27,7 @@ pub struct BlockList {
     /// List of blocks.
     blocks: [Block; MAX_BLOCK_COUNT as usize],
     // TODO: should sort by rank and use CSR?
+    // TODO: does this even need to be stored?
     /// Bitmap indicating, for each possible inner rank value, the indices of
     /// blocks with that inner rank.
     inner_ranks: [BitSet32; 5],

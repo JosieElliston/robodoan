@@ -57,6 +57,7 @@ impl Segment {
     /// Adds all `grip.twists()` to the segment.
     pub fn push_grip_twist(&self, grip: Grip) -> impl Iterator<Item = Option<Self>> {
         self.state.grip_twists(grip).map(|(twist, state)| {
+            #[cfg(feature = "gpu_test")]
             crate::gpu_test::add_example(&self.state, twist);
             Some(Self {
                 state: state.if_nonempty()?,
@@ -70,6 +71,7 @@ impl Segment {
     /// Adds a twist to the segment.
     #[must_use]
     pub fn push_twist(&self, twist: Twist) -> Option<Self> {
+        #[cfg(feature = "gpu_test")]
         crate::gpu_test::add_example(&self.state, twist);
         Some(Self {
             state: self.state.twist(twist).if_nonempty()?,
