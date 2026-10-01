@@ -42,7 +42,7 @@ name = "benchmark"
 harness = false
 
 [features]
-default = ["dbg_twist_count"]
+default = ["dbg_twist_count", "dbg_rank_counts"]
 gpu_test = []
 # used for eg not inlining functions so they show up when profiling.
 # #[cfg_attr(feature = "profiling", inline(never))]

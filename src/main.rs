@@ -134,12 +134,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(feature = "dbg_rank_counts")]
 fn print_rank_counts() {
+    /// blocks at a single inner rank.
+    const MAX_PER_RANK: u32 = 6;
+    /// total blocks across all inner ranks.
+    const MAX_BLOCKS: u32 = 16;
+
     let mut counts = sim::blockbuilding::rank_counts().into_iter().collect_vec();
     counts.sort_by_key(|&(k, n)| (std::cmp::Reverse(n), k));
     let total: u64 = counts.iter().map(|&(_, n)| n).sum();
 
     println!("\n\n---- RANK COUNTS ----\n");
-    println!("{} merge_blocks() calls", total,);
+    println!("{total} merge_blocks() calls");
     println!("{} distinct profiles", counts.len());
 
     // Per-rank marginals: mean and max popcount for each inner rank.
@@ -150,7 +155,7 @@ fn print_rank_counts() {
         println!(
             "{rank:>4} {:>6.2} {}",
             sum as f64 / total.max(1) as f64,
-            heat(max as u32, 6, 6),
+            heat(max as u32, MAX_PER_RANK, 6),
         );
     }
 
@@ -167,24 +172,47 @@ fn print_rank_counts() {
         cum += n;
         println!(
             "{} {n:>10} {:>6.2}% {:>6.2}%",
-            heat(len, 16, 6),
+            heat(len, MAX_BLOCKS, 6),
             100.0 * n as f64 / total as f64,
             100.0 * cum as f64 / total as f64,
         );
     }
 
-    println!("\nmax r_i      count       %    cum%");
+    // Histogram of the most blocks at any one inner rank.
+    println!("\nmax/rank      count       %    cum%");
     let mut cum = 0;
-    for rank in 0..5 {
-        let n: u64 = counts
-            .iter()
-            .filter_map(|&(k, n)| (*k.iter().max().unwrap() == rank).then_some(n))
-            .sum();
+    for (max, group) in &counts
+        .iter()
+        .map(|&(k, n)| (*k.iter().max().unwrap(), n))
+        .sorted()
+        .chunk_by(|&(max, _)| max)
+    {
+        let n: u64 = group.map(|(_, n)| n).sum();
         cum += n;
         println!(
-            "{rank:>7} {n:>10} {:>6.2}% {:>6.2}%",
+            "{} {n:>10} {:>6.2}% {:>6.2}%",
+            heat(max as u32, MAX_PER_RANK, 8),
             100.0 * n as f64 / total as f64,
             100.0 * cum as f64 / total as f64,
+        );
+    }
+
+    // Histogram of block count per inner rank, pooled over all 5 ranks.
+    println!("\nper rank      count       %    cum%");
+    let mut cum = 0;
+    for (x, group) in &counts
+        .iter()
+        .flat_map(|&(k, n)| k.map(|x| (x, n)))
+        .sorted()
+        .chunk_by(|&(x, _)| x)
+    {
+        let n: u64 = group.map(|(_, n)| n).sum();
+        cum += n;
+        println!(
+            "{} {n:>10} {:>6.2}% {:>6.2}%",
+            heat(x as u32, MAX_PER_RANK, 8),
+            100.0 * n as f64 / (5 * total) as f64,
+            100.0 * cum as f64 / (5 * total) as f64,
         );
     }
 
@@ -193,10 +221,10 @@ fn print_rank_counts() {
     let mut cum = 0;
     for &(k, n) in counts.iter().take(32) {
         cum += n;
-        let cells = k.iter().map(|&x| heat(x as u32, 6, 3)).join("");
+        let cells = k.iter().map(|&x| heat(x as u32, MAX_PER_RANK, 3)).join("");
         println!(
             "{cells}  {} {n:>12} {:>6.2}% {:>6.2}%",
-            heat(profile_len(k), 16, 6),
+            heat(profile_len(k), MAX_BLOCKS, 6),
             100.0 * n as f64 / total as f64,
             100.0 * cum as f64 / total as f64,
         );
