@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Index;
 
+use itertools::Either;
+
 #[cfg(feature = "dbg_rank_counts")]
 use std::collections::HashMap;
 
@@ -210,6 +212,102 @@ impl BlockList {
     ///
     /// An element is [`BlockList::EMPTY`] if there are too many blocks for that element.
     pub fn grip_twists(&self, grip: Grip) -> impl Iterator<Item = (Twist, BlockList)> {
+        const N: u32 = 16;
+
+        if self.len() > N {
+            return Either::Left(self.grip_twists_fallback(grip));
+        }
+
+        let mut active_blocks = [Block::EMPTY; N as usize];
+        let mut inactive_blocks = [Block::EMPTY; N as usize];
+
+        let mut active_len = 0;
+        let mut inactive_len = 0;
+
+        // let mut active_ranks: [BitSet32; 5];
+
+        for i in 0..self.len() {
+            let block = self[i];
+            let [active, inactive] = block.split(grip);
+
+            if !active.is_empty() {
+                #[cfg(debug_assertions)]
+                if inactive.is_empty() {
+                    debug_assert_eq!(active, block);
+                } else {
+                    debug_assert_eq!(active.inner_rank(), block.inner_rank() + 1);
+                }
+                active_blocks[active_len] = active;
+                active_len += 1;
+            }
+
+            if !inactive.is_empty() {
+                debug_assert_eq!(inactive.inner_rank(), block.inner_rank());
+                inactive_blocks[inactive_len] = inactive;
+                inactive_len += 1;
+            }
+
+            #[cfg(debug_assertions)]
+            match (active.is_empty(), inactive.is_empty()) {
+                (true, true) => debug_assert_eq!(active.inner_rank(), inactive.inner_rank() + 1),
+                (true, false) => debug_assert_eq!(inactive.inner_rank(), block.inner_rank()),
+                (false, true) => debug_assert_eq!(active.inner_rank(), block.inner_rank()),
+                (false, false) => (),
+            }
+        }
+
+        // {
+        //     let s = format!("active_len: {active_len}, inactive_len: {inactive_len}");
+        //     dbg_count!(s);
+        // }
+
+        let blocks_len = active_len + inactive_len;
+        if blocks_len > MAX_BLOCK_COUNT as usize {
+            return Either::Right(Either::Left(
+                grip.twists().into_iter().map(|twist| (twist, Self::EMPTY)),
+            ));
+        }
+
+        let mut blocks = [Block::EMPTY; MAX_BLOCK_COUNT as usize];
+        blocks[..active_len].copy_from_slice(&active_blocks[..active_len]);
+        blocks[active_len..blocks_len].copy_from_slice(&inactive_blocks[..inactive_len]);
+
+        let mut inner_ranks = [BitSet32::EMPTY; 5];
+        for i in 0..blocks_len {
+            // TODO: perf
+            inner_ranks[blocks[i].inner_rank() as usize].set_from_0(i as u8);
+        }
+
+        let mut meta = self.meta;
+        meta.count_twist_on_grip(grip);
+        meta.set_block_count(blocks_len as u8);
+
+        let split = Self {
+            blocks,
+            inner_ranks,
+            meta,
+        };
+
+        let twisted = grip.twists().into_iter().map(move |twist| {
+            #[cfg(feature = "dbg_twist_count")]
+            record_twist();
+
+            let mut ret = split;
+            for i in 0..active_len {
+                ret.blocks[i] = twist.transform * ret.blocks[i];
+            }
+            ret.cleanup();
+            
+            (twist, ret)
+        });
+        Either::Right(Either::Right(twisted))
+    }
+
+    /// Applies all `grip.twists()`.
+    /// Also gives the applied twist for convenience.
+    ///
+    /// An element is [`BlockList::EMPTY`] if there are too many blocks for that element.
+    fn grip_twists_fallback(&self, grip: Grip) -> impl Iterator<Item = (Twist, BlockList)> {
         grip.twists()
             .into_iter()
             .map(|twist| (twist, self.twist(twist)))
