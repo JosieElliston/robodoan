@@ -154,21 +154,6 @@ fn print_rank_counts() {
         );
     }
 
-    println!("\nmax rank      count       %    cum%");
-    let mut cum = 0;
-    for rank in 0..5 {
-        let n: u64 = counts
-            .iter()
-            .filter_map(|&(k, n)| (*k.iter().max().unwrap() == rank).then_some(n))
-            .sum();
-        cum += n;
-        println!(
-            "{rank:>8} {n:>10} {:>6.2}% {:>6.2}%",
-            100.0 * n as f64 / total as f64,
-            100.0 * cum as f64 / total as f64,
-        );
-    }
-
     // Histogram of total block count.
     println!("\nblocks      count       %    cum%");
     let mut cum = 0;
@@ -183,6 +168,21 @@ fn print_rank_counts() {
         println!(
             "{} {n:>10} {:>6.2}% {:>6.2}%",
             heat(len, 16, 6),
+            100.0 * n as f64 / total as f64,
+            100.0 * cum as f64 / total as f64,
+        );
+    }
+
+    println!("\nmax r_i      count       %    cum%");
+    let mut cum = 0;
+    for rank in 0..5 {
+        let n: u64 = counts
+            .iter()
+            .filter_map(|&(k, n)| (*k.iter().max().unwrap() == rank).then_some(n))
+            .sum();
+        cum += n;
+        println!(
+            "{rank:>7} {n:>10} {:>6.2}% {:>6.2}%",
             100.0 * n as f64 / total as f64,
             100.0 * cum as f64 / total as f64,
         );
